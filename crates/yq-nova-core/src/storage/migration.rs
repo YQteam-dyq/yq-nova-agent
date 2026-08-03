@@ -17,7 +17,7 @@ impl Migrator {
     /// `sqlx::migrate!()` embeds the migrations directory at compile time
     /// and uses the built-in `_sqlx_migrations` bookkeeping table.
     pub async fn run(pool: &SqlitePool) -> NovaResult<()> {
-        let migrator = sqlx::migrate!("migrations");
+        let migrator = sqlx::migrate!("./migrations");
         migrator.run(pool).await.map_err(crate::error::NovaError::storage)?;
         Ok(())
     }
