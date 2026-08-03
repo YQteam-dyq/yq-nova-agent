@@ -3,6 +3,9 @@
   <img src="https://img.shields.io/badge/sqlite-3.x-blue?logo=sqlite" alt="SQLite">
   <img src="https://img.shields.io/badge/license-BSL--1.1-red" alt="License">
   <img src="https://img.shields.io/badge/status-beta-green" alt="Status">
+  <img src="https://img.shields.io/crates/v/yq-nova-core?logo=rust" alt="yq-nova-core">
+  <img src="https://img.shields.io/crates/v/yq-nova-sdk?logo=rust" alt="yq-nova-sdk">
+  <img src="https://img.shields.io/crates/v/yq-nova-server?logo=rust" alt="yq-nova-server">
   <img src="https://img.shields.io/github/stars/YQteam-dyq/yq-nova-agent?style=social" alt="Stars">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs Welcome">
 </p>
@@ -51,6 +54,29 @@ You're building an agent that needs to:
 | **Background GC** | TTL expiry, importance-based forgetting, graceful shutdown |
 | **CLI subcommands** | `yq-nova remember`, `recall`, `forget`, `stats` — no server needed |
 | **Embedded SDK** | `yq-nova-core` as a Rust library, `yq-nova-sdk` as HTTP client |
+
+---
+
+## Installation
+
+### From crates.io
+
+```bash
+# Install the CLI + HTTP server binary
+cargo install yq-nova-server --locked
+
+# Or add as a library dependency
+cargo add yq-nova-core    # core memory & graph operations
+cargo add yq-nova-sdk     # HTTP client SDK
+```
+
+### From source
+
+```bash
+git clone https://github.com/YQteam-dyq/yq-nova-agent.git
+cd yq-nova-agent
+cargo build --release -p yq-nova-server --bin yq-nova
+```
 
 ---
 
