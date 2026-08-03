@@ -1,0 +1,33 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+*.env.local
+
+# Logs
+*.log
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Python SDK (if built)
+sdk/python/__pycache__/
+sdk/python/*.egg-info/
+sdk/python/dist/
+sdk/python/build/

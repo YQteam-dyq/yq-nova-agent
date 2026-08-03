@@ -1,0 +1,50 @@
+[package]
+name    = "yq-nova-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "yq-nova"
+path = "src/main.rs"
+
+[lib]
+name = "yq_nova_server"
+path = "src/lib.rs"
+
+[dependencies]
+# runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# HTTP server# web
+axum = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+
+# core
+yq-nova-core = { path = "../yq-nova-core" }
+
+# serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+
+# cli
+clap = { workspace = true }
+
+# logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# utilities
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }

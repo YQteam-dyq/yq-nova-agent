@@ -1,0 +1,51 @@
+[package]
+name    = "yq-nova-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[lib]
+name = "yq_nova_sdk"
+path = "src/lib.rs"
+
+[dependencies]
+# runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# core (embedded mode)
+yq-nova-core = { path = "../yq-nova-core" }
+
+# HTTP client (http mode)
+reqwest = { workspace = true }
+http = { workspace = true }
+
+# serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+# logging
+tracing = { workspace = true }
+
+# utilities
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+# required only for tests — spins up the axum server and talks to it via
+# reqwest, so downstream users of the SDK don't need to compile yq-nova-server
+# unless they run `cargo test -p yq-nova-sdk`.
+[dev-dependencies]
+yq-nova-server = { path = "../yq-nova-server" }
+axum = { workspace = true }
+

@@ -1,0 +1,51 @@
+[package]
+name    = "yq-nova-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[lib]
+name = "yq_nova_core"
+path = "src/lib.rs"
+
+[dependencies]
+# async
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# storage
+sqlx = { workspace = true }
+
+# serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_with = { workspace = true }
+
+# utilities
+uuid = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+figment = { workspace = true }
+arc-swap = { workspace = true }
+
+# HTTP client (for embedding providers)
+reqwest = { workspace = true }
+http = { workspace = true }
+
+# tracing / logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+# [features]
+# default = []
+# fastembed = ["dep:fastembed"]
+# sqlite-vec = []   # future: plug sqlite-vec vector store
