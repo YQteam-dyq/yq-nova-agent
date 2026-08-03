@@ -26,6 +26,11 @@ Thumbs.db
 *.db-shm
 *.db-journal
 
+# Internal docs (not for public repo)
+spec.md
+check_list.md
+tasks.md
+
 # Python SDK (if built)
 sdk/python/__pycache__/
 sdk/python/*.egg-info/
