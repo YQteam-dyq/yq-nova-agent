@@ -119,4 +119,6 @@ yq-nova stats
 
 ## License
 
-MIT OR Apache-2.0
+Business Source License 1.1 — see [LICENSE](LICENSE) for details.
+
+Non-production and personal use are free. **Commercial and production use require a separate license.** Contact the licensor for commercial licensing inquiries.

@@ -10,10 +10,10 @@ members = [
 version     = "0.1.0"
 edition     = "2021"
 rust-version = "1.75"
-license     = "MIT OR Apache-2.0"
+license     = "BSL-1.1"
 authors     = ["yq-nova contributors"]
-repository  = "https://github.com/yq-nova/yq-nova-agent"
-homepage    = "https://github.com/yq-nova/yq-nova-agent"
+repository  = "https://github.com/YQteam-dyq/yq-nova-agent"
+homepage    = "https://github.com/YQteam-dyq/yq-nova-agent"
 description = "Lightweight, single-file Agent memory & state layer (semantic search + graph)"
 
 [workspace.dependencies]
