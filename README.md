@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/sqlite-3.x-blue?logo=sqlite" alt="SQLite">
   <img src="https://img.shields.io/badge/license-BSL--1.1-red" alt="License">
-  <img src="https://img.shields.io/badge/status-alpha-yellow" alt="Status">
+  <img src="https://img.shields.io/badge/status-beta-green" alt="Status">
   <img src="https://img.shields.io/github/stars/YQteam-dyq/yq-nova-agent?style=social" alt="Stars">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs Welcome">
 </p>
