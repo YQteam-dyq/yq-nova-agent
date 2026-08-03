@@ -18,7 +18,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 
 # core (embedded mode)
-yq-nova-core = { path = "../yq-nova-core" }
+yq-nova-core = { version = "0.1.0", path = "../yq-nova-core" }
 
 # HTTP client (http mode)
 reqwest = { workspace = true }
@@ -48,4 +48,3 @@ path = "examples/demo.rs"
 [dev-dependencies]
 yq-nova-server = { path = "../yq-nova-server" }
 axum = { workspace = true }
-
