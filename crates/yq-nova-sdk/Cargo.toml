@@ -18,7 +18,10 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 
 # core (embedded mode)
-yq-nova-core = { version = "0.1.0", path = "../yq-nova-core" }
+yq-nova-core = { version = "0.2.0", path = "../yq-nova-core" }
+
+# storage (embedded mode: direct DB stats queries)
+sqlx = { workspace = true }
 
 # HTTP client (http mode)
 reqwest = { workspace = true }

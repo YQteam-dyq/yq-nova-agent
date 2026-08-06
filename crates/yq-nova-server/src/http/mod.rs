@@ -20,6 +20,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+pub mod auth;
 pub mod error;
 pub mod graph;
 pub mod memory;
@@ -52,10 +53,16 @@ pub fn build_router(state: AppState) -> Router {
         .route("/graph/relations", post(graph::upsert_relation).get(graph::list_relations))
         .route("/graph/traverse", post(graph::traverse));
 
+    // 鉴权中间件需要的 state 副本（`state` 随后被 `.with_state` 移动）。
+    let auth_state = state.clone();
+
     Router::new()
         .nest("/v1", api_v1)
         .with_state(state)
         // ---- 通用中间件（从外到内执行） ----
+        // 鉴权层放在最内层（紧邻路由），覆盖所有 /v1/* 路由；同时位于
+        // CorsLayer 之内，保证 OPTIONS 预检请求不被鉴权拦截。
+        .layer(axum::middleware::from_fn_with_state(auth_state, auth::auth_middleware))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(methods).allow_headers(Any))
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // P8-4: 10MB body limit
         .layer(CompressionLayer::new().gzip(true).no_deflate().no_zstd())

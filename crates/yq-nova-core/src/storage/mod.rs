@@ -22,6 +22,8 @@ pub mod migration;
 pub mod relation;
 pub mod tag;
 pub mod vector;
+#[cfg(feature = "sqlite-vec")]
+pub mod vector_vec;
 
 // -----------------------------------------------------------------------------
 // Connection pool factory
@@ -335,3 +337,5 @@ pub use relation::{
 };
 pub use tag::{SqliteTagRepository, TagRecord, TagRepository};
 pub use vector::{SqliteVectorStore, VectorHit, VectorStore};
+#[cfg(feature = "sqlite-vec")]
+pub use vector_vec::SqliteVecVectorStore;

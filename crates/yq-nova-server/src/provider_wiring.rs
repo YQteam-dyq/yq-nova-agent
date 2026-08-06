@@ -11,13 +11,15 @@
 use std::sync::Arc;
 
 use yq_nova_core::{
-    config::EmbeddingConfig,
+    config::{EmbeddingConfig, FastEmbedConfig},
     embedding::{
         EmbeddingRegistry, MockEmbeddingProvider, OpenAiCompatConfig, OpenAiCompatProvider,
         SharedEmbeddingProvider, retry::RetryConfig,
     },
     error::{NovaError, NovaResult},
 };
+#[cfg(feature = "fastembed")]
+use yq_nova_core::embedding::{EmbeddingProvider, FastEmbedProvider, FastEmbedProviderConfig};
 
 /// 给定一个 EmbeddingConfig，解析成 SharedEmbeddingProvider（Arc<dyn ...>）。
 ///
@@ -61,13 +63,9 @@ pub fn build_default_provider(
         return Ok((key, Arc::new(provider), dims));
     }
 
-    // --- 3. FastEmbed placeholder: feature flag ---
-    if cfg.fastembed_local.contains_key(&key) {
-        return Err(NovaError::config_msg(format!(
-            "fastembed-local provider '{key}' requires --features fastembed; \
-             current MVP binary was built without local-onnx support. \
-             Tip: use 'mock' or an openai_compatible provider for now.",
-        )));
+    // --- 3. FastEmbed provider (local ONNX) ---
+    if let Some(fastembed_cfg) = cfg.fastembed_local.get(&key) {
+        return build_fastembed(fastembed_cfg, &key);
     }
 
     Err(NovaError::config_msg(format!(
@@ -75,6 +73,44 @@ pub fn build_default_provider(
          Available keys: openai_compatible keys: [{}], fastembed keys: [{}], special: 'mock'",
         cfg.openai_compatible.keys().cloned().collect::<Vec<_>>().join(", "),
         cfg.fastembed_local.keys().cloned().collect::<Vec<_>>().join(", "),
+    )))
+}
+
+/// 构造 FastEmbed 本地 ONNX 提供者。
+///
+/// 启用 `fastembed` feature 时真正加载模型；未启用时返回配置错误，提示
+/// 需要 `--features fastembed`。
+fn build_fastembed(
+    cfg: &FastEmbedConfig,
+    key: &str,
+) -> NovaResult<(String, SharedEmbeddingProvider, usize)> {
+    build_fastembed_impl(cfg, key)
+}
+
+#[cfg(feature = "fastembed")]
+fn build_fastembed_impl(
+    cfg: &FastEmbedConfig,
+    key: &str,
+) -> NovaResult<(String, SharedEmbeddingProvider, usize)> {
+    let provider_cfg = FastEmbedProviderConfig {
+        model_name: cfg.model_name.clone(),
+        dimensions: cfg.dimensions,
+        cache_dir: cfg.cache_dir.clone(),
+    };
+    let provider = FastEmbedProvider::new(provider_cfg)?;
+    let dims = provider.meta().dims;
+    Ok((key.to_string(), Arc::new(provider), dims))
+}
+
+#[cfg(not(feature = "fastembed"))]
+fn build_fastembed_impl(
+    _cfg: &FastEmbedConfig,
+    key: &str,
+) -> NovaResult<(String, SharedEmbeddingProvider, usize)> {
+    Err(NovaError::config_msg(format!(
+        "fastembed-local provider '{key}' requires --features fastembed; \
+         current binary was built without local-onnx support. \
+         Tip: use 'mock' or an openai_compatible provider for now.",
     )))
 }
 
