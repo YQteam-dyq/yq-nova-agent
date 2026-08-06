@@ -72,10 +72,12 @@ pub struct Config {
 /// - `concurrency`: 16~128，取决于部署机器的 CPU 核心数
 /// - `request_timeout`: 15~60 秒；若使用慢速 embedding 上游请适当调大
 /// - `max_request_body_bytes`: 最小 1024，推荐 1~10 MB
+/// - `auth_token`: 建议在暴露到 `0.0.0.0` 之前设置，用于 API token 鉴权
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
-    /// 监听地址。默认 `127.0.0.1:7999`，未加认证层前切勿暴露到 `0.0.0.0`。
+    /// 监听地址。默认 `127.0.0.1:7999`。若需暴露到 `0.0.0.0`，强烈建议
+    /// 先设置 `auth_token`（见下），否则任何人可访问所有 API。
     pub bind: String,
     /// 并发请求上限，超过后返回 503。推荐范围 16..=128。
     pub concurrency: usize,
@@ -84,6 +86,10 @@ pub struct ServerConfig {
     pub request_timeout: Duration,
     /// 请求体最大字节数，最小 1024，默认 10 MB。
     pub max_request_body_bytes: usize,
+    /// API Token 鉴权密钥。空表示不启用鉴权；非空时所有请求必须携带
+    /// `Authorization: Bearer <token>`（或原始 token）才能通过。该值不会
+    /// 出现在默认 TOML 输出中，仅通过配置显式注入。
+    pub auth_token: String,
 }
 
 impl Default for ServerConfig {
@@ -93,6 +99,7 @@ impl Default for ServerConfig {
             concurrency: 32,
             request_timeout: Duration::from_secs(30),
             max_request_body_bytes: 10 * 1024 * 1024,
+            auth_token: String::new(),
         }
     }
 }
@@ -230,12 +237,21 @@ impl Default for OpenAiCompatConfig {
 }
 
 /// FastEmbed 本地 ONNX Embedding 提供者配置。
+///
+/// 需在编译期启用 `fastembed` feature（`cargo build --features fastembed`）
+/// 才能真正加载模型；否则启动时检测到该提供者会报错提示启用 feature。
+/// 首次加载模型时会从 HuggingFace 下载 ONNX 权重到 `cache_dir`。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FastEmbedConfig {
     /// FastEmbed 模型名称，如 `BAAI/bge-small-en-v1.5`。
+    /// 支持：`BAAI/bge-small-en-v1.5`、`BAAI/bge-base-en-v1.5`、
+    /// `sentence-transformers/all-MiniLM-L6-v2`、`jinaai/jina-embeddings-v2-base-en`。
     pub model_name: String,
-    /// 模型文件缓存目录，默认为 FastEmbed 的全局缓存。
+    /// 向量维度。`0` 表示按模型自动推断（如 bge-small / all-MiniLM 为 384，
+    /// bge-base / jina-v2-base 为 768）。显式设置后用于向量库标定与维度校验。
+    pub dimensions: usize,
+    /// 模型文件缓存目录，默认为 FastEmbed 的全局缓存目录。
     pub cache_dir: PathBuf,
 }
 
@@ -360,11 +376,30 @@ pub struct LoggingConfig {
     pub file: Option<PathBuf>,
     /// stderr 输出是否包含 ANSI 颜色码。终端环境推荐 true。
     pub ansi: bool,
+    /// 是否启用 OpenTelemetry 追踪导出（需编译 `otel` feature）。
+    /// 启用后 span 会通过 OTLP HTTP 发送到 `otel_endpoint`。默认 false。
+    pub otel_enabled: bool,
+    /// OTLP HTTP collector 地址（对应 `http-proto`）。
+    /// 默认 `http://localhost:4318`（OTLP/HTTP，`/v1/traces` 路径由 exporter 自动拼接）。
+    pub otel_endpoint: String,
+    /// 导出到 OTel 的 service 名称。默认 `yq-nova`。
+    pub otel_service_name: String,
+    /// 追踪采样率 `[0, 1]`，1.0 表示全量采样。默认 1.0。
+    pub otel_sample_rate: f32,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
-        Self { level: "info".into(), json_format: false, file: None, ansi: true }
+        Self {
+            level: "info".into(),
+            json_format: false,
+            file: None,
+            ansi: true,
+            otel_enabled: false,
+            otel_endpoint: "http://localhost:4318".into(),
+            otel_service_name: "yq-nova".into(),
+            otel_sample_rate: 1.0,
+        }
     }
 }
 
@@ -426,6 +461,14 @@ impl Config {
         }
         if self.embedding.default_provider.is_empty() {
             return Err(NovaError::config_msg("embedding.default_provider must be set"));
+        }
+        // fastembed_local 提供者基础校验：模型名非空（若配置了该提供者）。
+        for (name, fe) in &self.embedding.fastembed_local {
+            if fe.model_name.trim().is_empty() {
+                return Err(NovaError::config_msg(format!(
+                    "embedding.fastembed_local['{name}'].model_name must not be empty"
+                )));
+            }
         }
         if self.forgetting.stale_importance_threshold < 0.0
             || self.forgetting.stale_importance_threshold > 1.0

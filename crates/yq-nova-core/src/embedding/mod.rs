@@ -160,6 +160,11 @@ pub fn deterministic_pseudo_embedding(text: &str, dims: usize) -> Vec<f32> {
 pub mod openai_compat;
 pub use openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
 
+#[cfg(feature = "fastembed")]
+pub mod fastembed;
+#[cfg(feature = "fastembed")]
+pub use fastembed::{FastEmbedProvider, FastEmbedProviderConfig};
+
 pub mod retry;
 
 #[cfg(test)]

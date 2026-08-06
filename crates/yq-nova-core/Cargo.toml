@@ -45,7 +45,33 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 
-# [features]
-# default = []
-# fastembed = ["dep:fastembed"]
-# sqlite-vec = []   # future: plug sqlite-vec vector store
+# optional: local ONNX embeddings (FastEmbed)
+fastembed = { workspace = true, optional = true }
+# optional: HNSW vector index (sqlite-vec)
+sqlite-vec = { workspace = true, optional = true }
+# optional: OpenTelemetry observability
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+[features]
+default = []
+# 本地 ONNX 推理（FastEmbed）。启用后 `embedding.fastembed_local` 可真正加载模型。
+fastembed = ["dep:fastembed"]
+# 基于 sqlite-vec 的 HNSW 向量索引后端（性能优于线性扫描）。
+sqlite-vec = ["dep:sqlite-vec"]
+# OpenTelemetry 可观测性导出（tracing -> OTLP）。
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+]
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "perf"
+harness = false

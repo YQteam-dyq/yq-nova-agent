@@ -28,7 +28,7 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 
 # core
-yq-nova-core = { version = "0.1.0", path = "../yq-nova-core" }
+yq-nova-core = { version = "0.2.0", path = "../yq-nova-core" }
 
 # serialization
 serde = { workspace = true }
@@ -48,3 +48,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[features]
+default = []
+# 转发到 yq-nova-core：本地 ONNX embedding / HNSW 向量索引 / OTel 可观测性。
+fastembed    = ["yq-nova-core/fastembed"]
+sqlite-vec   = ["yq-nova-core/sqlite-vec"]
+otel         = ["yq-nova-core/otel"]

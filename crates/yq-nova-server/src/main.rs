@@ -234,7 +234,7 @@ fn clap_num() -> impl clap::builder::TypedValueParser<Value = f32> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run().await {
+    let exit_code = match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // If tracing isn't initialised yet we still want a readable error.
@@ -242,7 +242,14 @@ async fn main() -> ExitCode {
             error!(error = %e, "yq-nova exited with error");
             ExitCode::FAILURE
         },
-    }
+    };
+
+    // Flush + shutdown the OpenTelemetry exporter before the process exits
+    // so no spans are lost (no-op when OTel is disabled / not compiled in).
+    #[cfg(feature = "otel")]
+    yq_nova_core::logging::shutdown_otel();
+
+    exit_code
 }
 
 async fn run() -> NovaResult<()> {

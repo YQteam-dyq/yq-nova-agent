@@ -1,7 +1,7 @@
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
+# NOTE: Cargo.lock is deliberately committed so CI's `--locked` builds are reproducible.
 
 # IDE
 .vscode/
@@ -32,7 +32,8 @@ check_list.md
 tasks.md
 
 # Python SDK (if built)
-sdk/python/__pycache__/
-sdk/python/*.egg-info/
-sdk/python/dist/
-sdk/python/build/
+__pycache__/
+*.egg-info/
+dist/
+build/
+.virtualenvs/

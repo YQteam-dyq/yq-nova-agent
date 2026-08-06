@@ -1,0 +1,15 @@
+services:
+  yq-nova:
+    build: .
+    container_name: yq-nova
+    ports:
+      - "7999:7999"
+    volumes:
+      - yq-nova-data:/data
+    environment:
+      - YQ_NOVA_EMBEDDING__DEFAULT_PROVIDER=mock
+      - YQ_NOVA_STORAGE__DB_PATH=/data/yq-nova.db
+    restart: unless-stopped
+
+volumes:
+  yq-nova-data:

@@ -20,6 +20,15 @@ use crate::{
     error::{NovaError, NovaResult},
 };
 
+#[cfg(feature = "otel")]
+use opentelemetry::trace::TracerProvider as _;
+#[cfg(feature = "otel")]
+use opentelemetry_otlp::WithExportConfig;
+#[cfg(feature = "otel")]
+use tracing_subscriber::layer::Identity;
+#[cfg(feature = "otel")]
+use tracing_subscriber::registry::LookupSpan;
+
 /// Global `trace_id` — cheap `OnceLock`; populated by the first call to
 /// [`current_trace_id`]. Not intended to be used by request paths (which
 /// generate per-request ids via tower layer).
@@ -77,6 +86,11 @@ pub fn init_tracing(cfg: &LoggingConfig) -> NovaResult<bool> {
     };
 
     let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
+
+    // --- Optional OpenTelemetry layer (feature-gated). ---
+    #[cfg(feature = "otel")]
+    let registry = registry.with(init_otel_layer(cfg)?);
+
     if let Some(file) = file_layer {
         registry.with(file).try_init().map_err(|e| {
             NovaError::config_msg(format!("failed to init tracing subscriber: {e}"))
@@ -106,6 +120,71 @@ pub fn current_trace_id() -> &'static str {
 /// needed). Mostly exposed for tests.
 pub fn current_dispatch() -> Dispatch {
     tracing::dispatcher::get_default(|d| d.clone())
+}
+
+// ---------------------------------------------------------------------------
+// OpenTelemetry (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Build an optional OpenTelemetry [`Layer`] that exports spans to an OTLP
+/// collector over HTTP.
+///
+/// Returns `Ok(None)` when OTel is disabled in the config (or when the
+/// `otel` feature is not compiled in — this function is itself gated, so the
+/// caller's default / non-otel builds simply never call it). When enabled, a
+/// [`TracerProvider`] with a batch exporter and a trace-id-ratio sampler is
+/// registered as the global tracer provider, and a
+/// [`tracing_opentelemetry::OpenTelemetryLayer`] wrapping its tracer is
+/// returned so it can be `.with(...)`-ed into the tracing registry.
+///
+/// Generic over the subscriber type `S` (the registry / layered subscriber it
+/// is attached to), matching how `tracing_subscriber` layers are composed.
+#[cfg(feature = "otel")]
+pub fn init_otel_layer<S>(
+    cfg: &LoggingConfig,
+) -> NovaResult<Box<dyn Layer<S> + Send + Sync>>
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
+{
+    if !cfg.otel_enabled {
+        // Pass-through layer: does nothing, keeps the registry type uniform.
+        return Ok(Box::new(Identity::default()));
+    }
+
+    // HTTP OTLP exporter (http-proto), pointing at the configured collector.
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(cfg.otel_endpoint.clone())
+        .build()
+        .map_err(|e| {
+            NovaError::config_msg(format!("failed to build OTLP span exporter: {e}"))
+        })?;
+
+    let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+        .with_sampler(opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
+            cfg.otel_sample_rate as f64,
+        ))
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .build();
+
+    // Register globally so `opentelemetry::global::shutdown_tracer_provider()`
+    // (see [`shutdown_otel`]) can flush + shutdown on process exit. Keep the
+    // SDK tracer (not the global `BoxedTracer`) for the layer, since
+    // `tracing-opentelemetry` requires a `PreSampledTracer`.
+    let tracer = provider.tracer(cfg.otel_service_name.clone());
+    opentelemetry::global::set_tracer_provider(provider);
+
+    let layer = tracing_opentelemetry::layer().with_tracer(tracer).boxed();
+    Ok(layer)
+}
+
+/// Flush and shut down the global OpenTelemetry tracer provider.
+///
+/// Safe to call unconditionally at process exit; it is a no-op when OTel was
+/// never initialised. Only compiled in with the `otel` feature.
+#[cfg(feature = "otel")]
+pub fn shutdown_otel() {
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 // ---------------------------------------------------------------------------

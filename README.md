@@ -80,6 +80,28 @@ cargo build --release -p yq-nova-server --bin yq-nova
 
 ---
 
+## Docker
+
+### Compose（推荐）
+
+```bash
+docker compose up -d
+```
+
+### 直接构建并运行
+
+```bash
+docker build -t yq-nova .
+docker run -p 7999:7999 \
+  -v yq-nova-data:/data \
+  -e YQ_NOVA_EMBEDDING__DEFAULT_PROVIDER=mock \
+  yq-nova serve
+```
+
+> 数据卷 `yq-nova-data` 挂载到容器内 `/data`，SQLite 数据库持久化在 `/data/yq-nova.db`，容器重建后数据不丢失。
+
+---
+
 ## Quick Start
 
 ```bash

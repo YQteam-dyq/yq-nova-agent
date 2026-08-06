@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version     = "0.1.0"
+version     = "0.2.0"
 edition     = "2021"
 rust-version = "1.75"
 license     = "BSL-1.0"
@@ -73,13 +73,21 @@ tracing-subscriber = { version = "0.3", features = [
     "ansi",
 ] }
 tracing-appender = "0.2"
-# opentelemetry_api = "0.27"   # v0.4+: add here per-crate as optional dep
 
-# ---- embeddings (optional) ----
-# fastembed = "2"   # enable per-crate via feature gate
+# ---- observability (optional, per-crate feature gate) ----
+opentelemetry = { version = "0.27", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.27", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
+tracing-opentelemetry = { version = "0.28", default-features = false }
 
-# ---- testing ----
-# (tests only, use dev-dependencies in each crate)
+# ---- embeddings (optional, local ONNX inference) ----
+fastembed = { version = "5" }
+
+# ---- vector index (optional, HNSW via sqlite-vec) ----
+sqlite-vec = { version = "0.1.9" }
+
+# ---- benchmarking (dev-dependency) ----
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [workspace.metadata]
 docs-rs-meta = "stable"
