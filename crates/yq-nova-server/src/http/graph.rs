@@ -11,7 +11,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yq_nova_core::{
-    graph::{GraphExtractOpts, GraphService, LinkResult, TraverseOpts},
+    graph::{
+        GraphExtractOpts, GraphService, LinkResult, MergeEntitiesInput, MergeEntitiesOutput,
+        TraverseOpts,
+    },
     storage::{
         EntityRecord, EntityRepository, InsertRelationInput, InsertRelationOutcome, RelationRecord,
         RelationRepository, SqliteEntityRepository, SqliteRelationRepository, TraverseNode,
@@ -275,5 +278,24 @@ pub async fn extract_and_link(
 ) -> Result<Json<LinkResult>> {
     let svc: &GraphService = &state.graph;
     let out = svc.extract_and_link(&req.text, &req.opts).await?;
+    Ok(Json(out))
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MergeEntitiesRequest {
+    pub keep_uuid: Uuid,
+    pub discard_uuids: Vec<Uuid>,
+}
+
+pub async fn merge_entities(
+    State(state): State<AppState>,
+    Json(req): Json<MergeEntitiesRequest>,
+) -> Result<Json<MergeEntitiesOutput>> {
+    let svc: &GraphService = &state.graph;
+    let input = MergeEntitiesInput {
+        keep_uuid: req.keep_uuid,
+        discard_uuids: req.discard_uuids,
+    };
+    let out = svc.merge_entities(input).await?;
     Ok(Json(out))
 }

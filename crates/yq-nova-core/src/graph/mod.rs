@@ -26,7 +26,7 @@ pub use crate::storage::relation::RelationRecord;
 pub mod extractor;
 
 use crate::{
-    error::NovaResult,
+    error::{NovaError, NovaResult},
     storage::{
         Database,
         entity::{EntityRepository, SqliteEntityRepository, UpsertEntityInput, UpsertOutcome},
@@ -67,6 +67,26 @@ pub struct LinkResult {
     pub relations_created: usize,
     /// 文本中识别出的标签集合。
     pub tags: Vec<String>,
+}
+
+/// 实体合并输入。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeEntitiesInput {
+    /// 合并后保留的实体 UUID。
+    pub keep_uuid: Uuid,
+    /// 被合并的实体 UUID 列表（1~50 个）。
+    pub discard_uuids: Vec<Uuid>,
+}
+
+/// 实体合并输出。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeEntitiesOutput {
+    /// 保留的实体 UUID。
+    pub kept_uuid: Uuid,
+    /// 实际被合并的实体 UUID 列表。
+    pub merged: Vec<Uuid>,
+    /// 被重映射的关系边数量。
+    pub remapped_relations: usize,
 }
 
 /// 图谱 BFS 遍历参数。
@@ -193,14 +213,16 @@ impl GraphService {
         let _start_ent = self.entity_repo.get_by_uuid(&self.database, start).await?;
         let nodes = self
             .relation_repo
-            .bfs_traverse(&self.database, start, Direction::Both, opts.max_depth, opts.max_nodes)
+            .bfs_traverse(
+                &self.database,
+                start,
+                Direction::Both,
+                opts.max_depth,
+                opts.max_nodes,
+                &opts.predicate_whitelist,
+                opts.min_confidence,
+            )
             .await?;
-
-        // Predicate whitelist: for MVP, keep it simple — since TraverseNode
-        // carries entity + depth + path (not edges inline), we skip the
-        // per-node edge filter and keep the BFS-traced node list as-is.
-        // Callers who need per-edge filtering can list_outgoing on each node.
-        let _wl = opts.predicate_whitelist;
         Ok(nodes)
     }
 
@@ -214,6 +236,113 @@ impl GraphService {
         limit: usize,
     ) -> NovaResult<Vec<EntityRecord>> {
         self.entity_repo.list(&self.database, name_prefix, entity_type, limit, 0).await
+    }
+
+    /// 合并实体：将 discard_uuids 中的实体合并到 keep_uuid 实体。
+    pub async fn merge_entities(&self, input: MergeEntitiesInput) -> NovaResult<MergeEntitiesOutput> {
+        let keep = input.keep_uuid;
+        let discards = input.discard_uuids;
+
+        if discards.is_empty() || discards.len() > 50 {
+            return Err(NovaError::validation(
+                "discard_uuids must contain between 1 and 50 UUIDs",
+            ));
+        }
+        if discards.contains(&keep) {
+            return Err(NovaError::validation(
+                "keep_uuid must not be in discard_uuids",
+            ));
+        }
+
+        let _keep_entity = self.entity_repo.get_by_uuid(&self.database, keep).await?;
+        for &d in &discards {
+            self.entity_repo.get_by_uuid(&self.database, d).await?;
+        }
+
+        let pool = &self.database.pool;
+        let keep_str = keep.to_string();
+        let discard_set: std::collections::HashSet<Uuid> = discards.iter().copied().collect();
+        let mut remapped = 0usize;
+
+        for &d in &discards {
+            let d_str = d.to_string();
+
+            let outgoing: Vec<(String, String)> = sqlx::query_as(
+                "SELECT uuid, target_uuid FROM relations WHERE source_uuid = ?1",
+            )
+            .bind(&d_str)
+            .fetch_all(pool)
+            .await
+            .map_err(NovaError::storage)?;
+
+            for (rel_uuid, tgt_str) in &outgoing {
+                let tgt = match Uuid::parse_str(tgt_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                if tgt == keep || discard_set.contains(&tgt) {
+                    sqlx::query("DELETE FROM relations WHERE uuid = ?1")
+                        .bind(rel_uuid)
+                        .execute(pool)
+                        .await
+                        .map_err(NovaError::storage)?;
+                } else {
+                    sqlx::query("UPDATE relations SET source_uuid = ?1 WHERE uuid = ?2")
+                        .bind(&keep_str)
+                        .bind(rel_uuid)
+                        .execute(pool)
+                        .await
+                        .map_err(NovaError::storage)?;
+                    remapped += 1;
+                }
+            }
+
+            let incoming: Vec<(String, String)> = sqlx::query_as(
+                "SELECT uuid, source_uuid FROM relations WHERE target_uuid = ?1",
+            )
+            .bind(&d_str)
+            .fetch_all(pool)
+            .await
+            .map_err(NovaError::storage)?;
+
+            for (rel_uuid, src_str) in &incoming {
+                let src = match Uuid::parse_str(src_str) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                if discard_set.contains(&src) {
+                    continue;
+                }
+                if src == keep {
+                    sqlx::query("DELETE FROM relations WHERE uuid = ?1")
+                        .bind(rel_uuid)
+                        .execute(pool)
+                        .await
+                        .map_err(NovaError::storage)?;
+                } else {
+                    sqlx::query("UPDATE relations SET target_uuid = ?1 WHERE uuid = ?2")
+                        .bind(&keep_str)
+                        .bind(rel_uuid)
+                        .execute(pool)
+                        .await
+                        .map_err(NovaError::storage)?;
+                    remapped += 1;
+                }
+            }
+
+            self.entity_repo.delete(&self.database, d).await?;
+        }
+
+        sqlx::query("DELETE FROM relations WHERE source_uuid = target_uuid")
+            .execute(pool)
+            .await
+            .map_err(NovaError::storage)?;
+
+        Ok(MergeEntitiesOutput {
+            kept_uuid: keep,
+            merged: discards,
+            remapped_relations: remapped,
+        })
     }
 }
 
@@ -364,50 +493,52 @@ mod tests {
         assert!(r.relations_created >= 3);
     }
 
-    #[tokio::test]
-    async fn bfs_traverse_on_small_diamond_graph() {
-        let svc = temp_svc().await;
-        // Build a tiny graph: A→{B,C}, B→D, C→D
-        async fn upsert(db: &Database, repo: &SqliteEntityRepository, n: &str, t: &str) -> Uuid {
-            let out = repo
-                .upsert(
-                    db,
-                    UpsertEntityInput { name: n, r#type: t, description: None, metadata: None },
-                )
-                .await
-                .unwrap();
-            out.uuid()
-        }
-        async fn link(
-            db: &Database,
-            repo: &SqliteRelationRepository,
-            src: Uuid,
-            tgt: Uuid,
-            p: &str,
-        ) {
-            repo.insert(
+    async fn upsert(db: &Database, repo: &SqliteEntityRepository, n: &str, t: &str) -> Uuid {
+        let out = repo
+            .upsert(
                 db,
-                InsertRelationInput {
-                    source_uuid: src,
-                    target_uuid: tgt,
-                    predicate: p,
-                    confidence: 0.9,
-                    memory_uuid: None,
-                    metadata: None,
-                    idempotent: false,
-                },
+                UpsertEntityInput { name: n, r#type: t, description: None, metadata: None },
             )
             .await
             .unwrap();
-        }
+        out.uuid()
+    }
+
+    async fn insert_edge(
+        db: &Database,
+        repo: &SqliteRelationRepository,
+        src: Uuid,
+        tgt: Uuid,
+        p: &str,
+        c: f32,
+    ) {
+        repo.insert(
+            db,
+            InsertRelationInput {
+                source_uuid: src,
+                target_uuid: tgt,
+                predicate: p,
+                confidence: c,
+                memory_uuid: None,
+                metadata: None,
+                idempotent: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn bfs_traverse_on_small_diamond_graph() {
+        let svc = temp_svc().await;
         let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
         let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
         let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
         let d = upsert(&svc.database, &svc.entity_repo, "D", "t").await;
-        link(&svc.database, &svc.relation_repo, a, b, "knows").await;
-        link(&svc.database, &svc.relation_repo, a, c, "knows").await;
-        link(&svc.database, &svc.relation_repo, b, d, "knows").await;
-        link(&svc.database, &svc.relation_repo, c, d, "knows").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, a, c, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, b, d, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, c, d, "knows", 1.0).await;
 
         let nodes = svc
             .traverse_graph(a, TraverseOpts { max_depth: 2, max_nodes: 50, ..Default::default() })
@@ -420,5 +551,211 @@ mod tests {
         assert!(visited.contains(&b));
         assert!(visited.contains(&c));
         assert!(visited.contains(&d));
+    }
+
+    #[tokio::test]
+    async fn traverse_with_predicate_whitelist_filters_out_edges() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
+        let d = upsert(&svc.database, &svc.entity_repo, "D", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, a, c, "likes", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, b, d, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, c, d, "likes", 1.0).await;
+
+        let nodes = svc
+            .traverse_graph(
+                a,
+                TraverseOpts {
+                    max_depth: 2,
+                    max_nodes: 50,
+                    predicate_whitelist: vec!["knows".to_string()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let visited: std::collections::HashSet<Uuid> =
+            nodes.iter().map(|n| n.entity.uuid).collect();
+        assert!(visited.contains(&a));
+        assert!(visited.contains(&b));
+        assert!(visited.contains(&d));
+        assert!(!visited.contains(&c));
+    }
+
+    #[tokio::test]
+    async fn traverse_with_confidence_threshold_filters_low_confidence_edges() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 0.9).await;
+        insert_edge(&svc.database, &svc.relation_repo, a, c, "knows", 0.5).await;
+
+        let nodes = svc
+            .traverse_graph(
+                a,
+                TraverseOpts {
+                    max_depth: 1,
+                    max_nodes: 50,
+                    min_confidence: 0.8,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let visited: std::collections::HashSet<Uuid> =
+            nodes.iter().map(|n| n.entity.uuid).collect();
+        assert!(visited.contains(&a));
+        assert!(visited.contains(&b));
+        assert!(!visited.contains(&c));
+    }
+
+    #[tokio::test]
+    async fn traverse_with_empty_whitelist_returns_all_nodes() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, a, c, "likes", 1.0).await;
+
+        let nodes = svc
+            .traverse_graph(
+                a,
+                TraverseOpts {
+                    max_depth: 1,
+                    max_nodes: 50,
+                    predicate_whitelist: vec![],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let visited: std::collections::HashSet<Uuid> =
+            nodes.iter().map(|n| n.entity.uuid).collect();
+        assert!(visited.contains(&a));
+        assert!(visited.contains(&b));
+        assert!(visited.contains(&c));
+    }
+
+    #[tokio::test]
+    async fn merge_entities_remaps_relations_and_deletes_discards() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, b, c, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, c, a, "knows", 1.0).await;
+
+        let out = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![b],
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.kept_uuid, a);
+        assert_eq!(out.merged, vec![b]);
+        assert_eq!(out.remapped_relations, 1);
+
+        assert!(svc.entity_repo.get_by_uuid(&svc.database, a).await.is_ok());
+        assert!(svc.entity_repo.get_by_uuid(&svc.database, b).await.is_err());
+
+        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].target_uuid, c);
+    }
+
+    #[tokio::test]
+    async fn merge_entities_rejects_keep_in_discard() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let err = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![a],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), crate::error::ErrorCode::Validation);
+    }
+
+    #[tokio::test]
+    async fn merge_entities_rejects_empty_discard() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let err = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), crate::error::ErrorCode::Validation);
+    }
+
+    #[tokio::test]
+    async fn merge_entities_rejects_nonexistent_entity() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let missing = Uuid::new_v4();
+        let err = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![missing],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), crate::error::ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn merge_entities_removes_self_loop_after_merge() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
+
+        let out = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![b],
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.remapped_relations, 0);
+
+        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        assert!(outgoing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn merge_entities_handles_two_discard_entities() {
+        let svc = temp_svc().await;
+        let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
+        let b = upsert(&svc.database, &svc.entity_repo, "B", "t").await;
+        let c = upsert(&svc.database, &svc.entity_repo, "C", "t").await;
+        let d = upsert(&svc.database, &svc.entity_repo, "D", "t").await;
+        insert_edge(&svc.database, &svc.relation_repo, b, d, "knows", 1.0).await;
+        insert_edge(&svc.database, &svc.relation_repo, c, d, "likes", 1.0).await;
+
+        let out = svc
+            .merge_entities(MergeEntitiesInput {
+                keep_uuid: a,
+                discard_uuids: vec![b, c],
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.remapped_relations, 2);
+
+        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        assert_eq!(outgoing.len(), 2);
+        for rel in &outgoing {
+            assert_eq!(rel.target_uuid, d);
+        }
     }
 }

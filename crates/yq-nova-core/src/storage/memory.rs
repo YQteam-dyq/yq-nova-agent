@@ -107,6 +107,19 @@ pub trait MemoryRepository: Repository<MemoryRecord> {
     ) -> NovaResult<()>;
     async fn update_importance(&self, db: &Database, uuid: Uuid, importance: f32)
     -> NovaResult<()>;
+    async fn update_content(
+        &self,
+        db: &Database,
+        uuid: Uuid,
+        content: &str,
+        content_hash: &str,
+    ) -> NovaResult<()>;
+    async fn update_expires_at(
+        &self,
+        db: &Database,
+        uuid: Uuid,
+        expires_at: Option<i64>,
+    ) -> NovaResult<()>;
     async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
     async fn mark_accessed(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
     async fn list(
@@ -285,6 +298,46 @@ impl MemoryRepository for SqliteMemoryRepository {
         Ok(())
     }
 
+    async fn update_content(
+        &self,
+        db: &Database,
+        uuid: Uuid,
+        content: &str,
+        content_hash: &str,
+    ) -> NovaResult<()> {
+        let res = sqlx::query(
+            "UPDATE memory_items SET content = ?1, content_hash = ?2 WHERE uuid = ?3",
+        )
+        .bind(content)
+        .bind(content_hash)
+        .bind(uuid.to_string())
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
+        if res.rows_affected() == 0 {
+            return Err(NovaError::not_found(format!("memory {uuid}")));
+        }
+        Ok(())
+    }
+
+    async fn update_expires_at(
+        &self,
+        db: &Database,
+        uuid: Uuid,
+        expires_at: Option<i64>,
+    ) -> NovaResult<()> {
+        let res = sqlx::query("UPDATE memory_items SET expires_at = ?1 WHERE uuid = ?2")
+            .bind(expires_at)
+            .bind(uuid.to_string())
+            .execute(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
+        if res.rows_affected() == 0 {
+            return Err(NovaError::not_found(format!("memory {uuid}")));
+        }
+        Ok(())
+    }
+
     async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()> {
         let res = sqlx::query("DELETE FROM memory_items WHERE uuid = ?1")
             .bind(uuid.to_string())
@@ -357,6 +410,33 @@ impl MemoryRepository for SqliteMemoryRepository {
         }
         let n = q.fetch_one(&db.pool).await.map_err(NovaError::storage)?;
         Ok(n)
+    }
+}
+
+impl SqliteMemoryRepository {
+    pub async fn check_content_hash_conflict(
+        &self,
+        db: &Database,
+        content_hash: &str,
+        exclude_uuid: Uuid,
+    ) -> NovaResult<Option<Uuid>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT uuid FROM memory_items \
+             WHERE content_hash = ?1 AND uuid != ?2 AND status != 'deleted'",
+        )
+        .bind(content_hash)
+        .bind(exclude_uuid.to_string())
+        .fetch_optional(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
+        match row {
+            Some((uuid_s,)) => {
+                let uuid = Uuid::parse_str(&uuid_s)
+                    .map_err(|e| NovaError::storage_msg(format!("bad uuid: {e}")))?;
+                Ok(Some(uuid))
+            },
+            None => Ok(None),
+        }
     }
 }
 
@@ -488,7 +568,7 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
     BuiltQuery { sql, binds }
 }
 
-fn sha256_hex(s: &str) -> String {
+pub(crate) fn sha256_hex(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
     let digest = hasher.finalize();

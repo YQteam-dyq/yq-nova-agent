@@ -2,12 +2,13 @@
 resolver = "2"
 members = [
     "crates/yq-nova-core",
+    "crates/yq-nova-mcp",
     "crates/yq-nova-server",
     "crates/yq-nova-sdk",
 ]
 
 [workspace.package]
-version     = "0.2.0"
+version     = "0.3.0"
 edition     = "2021"
 rust-version = "1.75"
 license     = "BSL-1.0"

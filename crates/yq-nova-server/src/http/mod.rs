@@ -46,10 +46,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/memory/remember", post(memory::remember))
         .route("/memory/recall", post(memory::recall))
         .route("/memory/forget", post(memory::forget))
-        .route("/memory/:uuid", get(memory::get_memory).delete(memory::delete_memory))
+        .route("/memory/export", post(memory::export_memories))
+        .route("/memory/import", post(memory::import_memories))
+        .route("/memory/merge", post(memory::merge_memories))
+        .route("/memory/:uuid", get(memory::get_memory).delete(memory::delete_memory).patch(memory::update_memory))
         // M4.3 graph routes
         .route("/graph/extract-and-link", post(graph::extract_and_link))
         .route("/graph/entities", post(graph::upsert_entity).get(graph::list_entities))
+        .route("/graph/entities/merge", post(graph::merge_entities))
         .route("/graph/relations", post(graph::upsert_relation).get(graph::list_relations))
         .route("/graph/traverse", post(graph::traverse));
 

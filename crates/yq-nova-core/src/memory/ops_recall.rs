@@ -28,6 +28,7 @@ use crate::{
     error::{NovaError, NovaResult},
     storage::{
         Direction, MemoryFilter, MemoryStatus,
+        entity::EntityRepository,
         fts5::Fts5Store,
         memory::{MemoryRecord, MemoryRepository},
         relation::RelationRepository,
@@ -69,6 +70,14 @@ pub struct RecallInput<'a> {
     /// Optional filter applied on all retrieved MemoryRecords before ranking.
     /// Use to restrict recall to a subset of sources / tags / time windows.
     pub filter: MemoryFilter,
+    /// When true, candidates with the same `chunk_group` metadata are collapsed
+    /// so only the highest-scoring chunk per group survives. Default: false.
+    pub group_chunks: bool,
+    /// Entity names to anchor recall on. When non-empty, entities matching
+    /// these names (case-insensitive) are found, BFS-traversed (depth ≤ 2),
+    /// and their associated memories are added to the candidate set with
+    /// graph_boost weighting. Unknown names are silently ignored.
+    pub entity_focus: Vec<String>,
 }
 
 impl<'a> Default for RecallInput<'a> {
@@ -84,6 +93,8 @@ impl<'a> Default for RecallInput<'a> {
             rrf_k: None,
             rank_weights: None,
             filter: MemoryFilter::default(),
+            group_chunks: false,
+            entity_focus: Vec::new(),
         }
     }
 }
@@ -187,6 +198,60 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
             let (expanded_mem, _seed_ents) =
                 expand_graph_memories(svc, &seed_uuids, &input.graph, fetch_k).await?;
             graph_memories = expanded_mem;
+        }
+    }
+
+    // --- 4b. Entity focus (if entity_focus is non-empty) --------------------
+    if !input.entity_focus.is_empty() {
+        let mut focus_entity_uuids: BTreeSet<Uuid> = BTreeSet::new();
+        for name in &input.entity_focus {
+            match svc.entity_repo.find_by_name(&svc.database, name).await {
+                Ok(entities) => {
+                    for ent in entities {
+                        focus_entity_uuids.insert(ent.uuid);
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        if !focus_entity_uuids.is_empty() {
+            let mut visited_entities: BTreeSet<Uuid> = focus_entity_uuids.clone();
+            for ent_uuid in &focus_entity_uuids {
+                if let Ok(nodes) = svc
+                    .relation_repo
+                    .bfs_traverse(&svc.database, *ent_uuid, Direction::Both, 2, 500, &[], 0.0)
+                    .await
+                {
+                    for n in nodes {
+                        visited_entities.insert(n.entity.uuid);
+                    }
+                }
+            }
+            let entity_strs: Vec<String> =
+                visited_entities.iter().map(|u| u.to_string()).collect();
+            let ph: Vec<&str> = entity_strs.iter().map(|_| "?").collect();
+            let phs = ph.join(",");
+            let sql = format!(
+                r#"
+                SELECT DISTINCT memory_uuid FROM relations
+                WHERE memory_uuid IS NOT NULL
+                  AND (source_uuid IN ({phs}) OR target_uuid IN ({phs}))
+                "#
+            );
+            let mut q = sqlx::query_scalar::<_, String>(&sql);
+            for s in &entity_strs {
+                q = q.bind(s);
+            }
+            for s in &entity_strs {
+                q = q.bind(s);
+            }
+            if let Ok(mem_strs) = q.fetch_all(&svc.database.pool).await.map_err(NovaError::storage) {
+                for s in mem_strs {
+                    if let Ok(u) = Uuid::parse_str(&s) {
+                        graph_memories.push(u);
+                    }
+                }
+            }
         }
     }
 
@@ -310,9 +375,39 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         .collect();
     let ranked = rank(candidates, weights, threshold);
 
-    // --- 8. Mark accessed for returned hits only ---------------------------
-    let mut hits: Vec<RecallHit> = Vec::with_capacity(ranked.len().min(top_k));
-    for rh in ranked.into_iter().take(top_k) {
+    // --- 8. Optional: collapse chunk groups so only the highest-scoring -----
+    // ---     chunk per chunk_group survives.                              ---
+    let collapsed: Vec<super::rank::RankedHit<'_>> = if input.group_chunks {
+        let mut best_per_group: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut deduped: Vec<super::rank::RankedHit<'_>> = Vec::with_capacity(ranked.len());
+        for rh in &ranked {
+            let group = rh.memory.metadata.get("chunk_group")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            if let Some(ref g) = group {
+                let entry = best_per_group.entry(g.clone()).or_insert(usize::MAX);
+                if *entry == usize::MAX {
+                    *entry = deduped.len();
+                    deduped.push(rh.clone());
+                } else {
+                    let existing = &deduped[*entry];
+                    if rh.final_score > existing.final_score {
+                        deduped[*entry] = rh.clone();
+                    }
+                }
+            } else {
+                deduped.push(rh.clone());
+            }
+        }
+        deduped
+    } else {
+        ranked
+    };
+
+    // --- 9. Mark accessed for returned hits only ---------------------------
+    let mut hits: Vec<RecallHit> = Vec::with_capacity(collapsed.len().min(top_k));
+    for rh in collapsed.into_iter().take(top_k) {
         let _ = svc.memory_repo.mark_accessed(&svc.database, rh.memory.uuid).await;
         hits.push(RecallHit {
             memory: rh.memory.clone(),
@@ -374,7 +469,7 @@ async fn expand_graph_memories(
     for ent in &start_entities {
         let Ok(nodes) = svc
             .relation_repo
-            .bfs_traverse(&svc.database, *ent, Direction::Both, max_depth, 500)
+            .bfs_traverse(&svc.database, *ent, Direction::Both, max_depth, 500, &[], 0.0)
             .await
         else {
             continue;
@@ -426,7 +521,7 @@ async fn expand_graph_memories(
 // filter helper
 // ---------------------------------------------------------------------------
 
-fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
+pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
     if let Some(ref statuses) = f.status_in {
         if !statuses.contains(&r.status) {
             return false;
@@ -490,6 +585,18 @@ fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
             return false;
         }
     }
+    if let Some(ref metadata_match) = f.metadata_match {
+        for (key, val) in metadata_match {
+            match r.metadata.get(key) {
+                Some(actual) => {
+                    if actual != val {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+    }
     true
 }
 
@@ -498,6 +605,7 @@ mod tests {
     use super::*;
     use crate::Uuid;
     use crate::config::StorageConfig;
+    use crate::memory::chunk::{ChunkOptions, SplitBy};
     use crate::memory::ops_remember::{RememberInput, service_for_tests};
     use crate::storage::{Database, MemorySource};
 
@@ -698,5 +806,332 @@ mod tests {
         let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
         assert!(ids.contains(&user.uuid));
         assert!(!ids.contains(&agent.uuid));
+    }
+
+    #[tokio::test]
+    async fn group_chunks_collapses_duplicate_groups() {
+        let svc = temp_svc().await;
+        let mut text = String::new();
+        for i in 0..6 {
+            if i > 0 {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!("This is paragraph {} for the chunk group recall test.", i));
+        }
+        let opts = ChunkOptions {
+            enabled: true,
+            split_by: SplitBy::Paragraph,
+            max_chars: 200,
+            overlap_chars: 30,
+        };
+        let chunked = svc
+            .remember(RememberInput {
+                content: &text,
+                chunk_options: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(chunked.chunks.len() > 1, "need at least 2 chunks for this test");
+
+        let standalone = svc
+            .remember(RememberInput {
+                content: "completely unrelated standalone memory for comparison",
+                importance: 0.9,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let out_no_group = svc
+            .recall(RecallInput {
+                query: "paragraph",
+                top_k: 20,
+                score_threshold: 0.0,
+                similarity_threshold: -1.0,
+                group_chunks: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let chunk_uuids_no_group: std::collections::HashSet<Uuid> =
+            chunked.chunks.iter().map(|c| c.uuid).collect();
+        let returned_uuids_no_group: std::collections::HashSet<Uuid> =
+            out_no_group.hits.iter().map(|h| h.memory.uuid).collect();
+        let overlap_no_group: Vec<&Uuid> =
+            chunk_uuids_no_group.iter().filter(|u| returned_uuids_no_group.contains(u)).collect();
+        assert!(
+            overlap_no_group.len() > 1,
+            "without group_chunks, multiple chunks should be returned, got {}",
+            overlap_no_group.len()
+        );
+
+        let out_grouped = svc
+            .recall(RecallInput {
+                query: "paragraph",
+                top_k: 20,
+                score_threshold: 0.0,
+                similarity_threshold: -1.0,
+                group_chunks: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let chunk_uuids_grouped: std::collections::HashSet<Uuid> =
+            chunked.chunks.iter().map(|c| c.uuid).collect();
+        let returned_uuids_grouped: std::collections::HashSet<Uuid> =
+            out_grouped.hits.iter().map(|h| h.memory.uuid).collect();
+        let overlap_grouped: Vec<&Uuid> =
+            chunk_uuids_grouped.iter().filter(|u| returned_uuids_grouped.contains(u)).collect();
+        assert!(
+            overlap_grouped.len() <= 1,
+            "with group_chunks, at most one chunk per group should be returned, got {}",
+            overlap_grouped.len()
+        );
+
+        let standalone_in_grouped = out_grouped.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
+        let standalone_in_no_group = out_no_group.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
+        assert_eq!(
+            standalone_in_grouped, standalone_in_no_group,
+            "standalone memory should be equally visible in both modes"
+        );
+    }
+
+    #[test]
+    fn passes_filter_metadata_match_subset() {
+        let rec = MemoryRecord {
+            metadata: serde_json::json!({"key1": "val1", "key2": "val2", "key3": 42}),
+            ..dummy_memory_record()
+        };
+        let f = MemoryFilter {
+            metadata_match: Some(vec![("key1".into(), serde_json::json!("val1"))]),
+            ..Default::default()
+        };
+        assert!(passes_filter(&rec, &f));
+    }
+
+    #[test]
+    fn passes_filter_metadata_match_multiple() {
+        let rec = MemoryRecord {
+            metadata: serde_json::json!({"key1": "val1", "key2": "val2", "key3": 42}),
+            ..dummy_memory_record()
+        };
+        let f = MemoryFilter {
+            metadata_match: Some(vec![
+                ("key1".into(), serde_json::json!("val1")),
+                ("key3".into(), serde_json::json!(42)),
+            ]),
+            ..Default::default()
+        };
+        assert!(passes_filter(&rec, &f));
+    }
+
+    #[test]
+    fn passes_filter_metadata_match_not_subset_wrong_value() {
+        let rec = MemoryRecord {
+            metadata: serde_json::json!({"key1": "val1", "key2": "val2"}),
+            ..dummy_memory_record()
+        };
+        let f = MemoryFilter {
+            metadata_match: Some(vec![("key1".into(), serde_json::json!("wrong"))]),
+            ..Default::default()
+        };
+        assert!(!passes_filter(&rec, &f));
+    }
+
+    #[test]
+    fn passes_filter_metadata_match_not_subset_missing_key() {
+        let rec = MemoryRecord {
+            metadata: serde_json::json!({"key1": "val1"}),
+            ..dummy_memory_record()
+        };
+        let f = MemoryFilter {
+            metadata_match: Some(vec![("missing_key".into(), serde_json::json!("val"))]),
+            ..Default::default()
+        };
+        assert!(!passes_filter(&rec, &f));
+    }
+
+    #[test]
+    fn passes_filter_metadata_match_none_does_not_filter() {
+        let rec = MemoryRecord {
+            metadata: serde_json::json!({"key1": "val1"}),
+            ..dummy_memory_record()
+        };
+        let f = MemoryFilter {
+            metadata_match: None,
+            ..Default::default()
+        };
+        assert!(passes_filter(&rec, &f));
+    }
+
+    fn dummy_memory_record() -> MemoryRecord {
+        MemoryRecord {
+            id: 0,
+            uuid: Uuid::nil(),
+            content: String::new(),
+            content_hash: String::new(),
+            metadata: serde_json::json!({}),
+            source: MemorySource::Agent,
+            importance: 0.5,
+            access_count: 0,
+            last_accessed: None,
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            status: MemoryStatus::Active,
+            tags: Vec::new(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // entity_focus tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn entity_focus_empty_does_not_change_behavior() {
+        let svc = temp_svc().await;
+        let m = svc
+            .remember(RememberInput {
+                content: "entity focus empty test content",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let out = svc
+            .recall(RecallInput {
+                query: "entity focus empty test content",
+                top_k: 10,
+                score_threshold: 0.0,
+                similarity_threshold: -1.0,
+                entity_focus: vec![],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
+        assert!(ids.contains(&m.uuid), "memory should be recalled without entity_focus");
+    }
+
+    #[tokio::test]
+    async fn entity_focus_unknown_name_is_ignored() {
+        let svc = temp_svc().await;
+        let m = svc
+            .remember(RememberInput {
+                content: "unknown entity focus test",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let out = svc
+            .recall(RecallInput {
+                query: "unknown entity focus test",
+                top_k: 10,
+                score_threshold: 0.0,
+                similarity_threshold: -1.0,
+                entity_focus: vec!["NonExistentEntity".to_string()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
+        assert!(ids.contains(&m.uuid), "memory should still be recalled when entity_focus name is unknown");
+    }
+
+    #[tokio::test]
+    async fn entity_focus_anchors_memories_via_graph() {
+        let svc = temp_svc().await;
+        use crate::storage::entity::UpsertEntityInput;
+        use crate::storage::relation::InsertRelationInput;
+
+        let alice = svc
+            .entity_repo
+            .upsert(
+                &svc.database,
+                UpsertEntityInput {
+                    name: "Alice",
+                    r#type: "person",
+                    description: None,
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid();
+        let bob = svc
+            .entity_repo
+            .upsert(
+                &svc.database,
+                UpsertEntityInput {
+                    name: "Bob",
+                    r#type: "person",
+                    description: None,
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid();
+
+        let m1 = svc
+            .remember(RememberInput {
+                content: "alice_work related content",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let m2 = svc
+            .remember(RememberInput {
+                content: "bob_hobby completely different topic",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        for (src, tgt, mem, pred) in [
+            (alice, bob, m1.uuid, "works_with"),
+            (alice, bob, m2.uuid, "knows"),
+        ] {
+            svc.relation_repo
+                .insert(
+                    &svc.database,
+                    InsertRelationInput {
+                        source_uuid: src,
+                        target_uuid: tgt,
+                        predicate: pred,
+                        confidence: 1.0,
+                        memory_uuid: Some(mem),
+                        metadata: None,
+                        idempotent: true,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let out = svc
+            .recall(RecallInput {
+                query: "alice_work",
+                top_k: 10,
+                score_threshold: 0.0,
+                similarity_threshold: -1.0,
+                entity_focus: vec!["Alice".to_string()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
+        assert!(ids.contains(&m1.uuid), "m1 should be recalled (semantic match)");
+        assert!(
+            ids.contains(&m2.uuid),
+            "m2 should be recalled via entity_focus graph expansion"
+        );
+        assert!(
+            out.hits.iter().any(|h| h.from_graph && h.memory.uuid == m2.uuid),
+            "m2 should be marked as from_graph"
+        );
     }
 }

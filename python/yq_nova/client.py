@@ -199,15 +199,15 @@ class Client:
         mode: str = "semantic",
         score_threshold: float = 0.0,
         similarity_threshold: float = -1.0,
+        graph: Optional[Dict[str, Any]] = None,
+        hybrid_weights: Optional[Dict[str, Any]] = None,
+        rrf_k: Optional[int] = None,
+        rank_weights: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any]] = None,
+        group_chunks: bool = False,
+        entity_focus: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Retrieve memories matching ``query``.
-
-        Args:
-            query: The search text (required, non-empty).
-            top_k: Maximum number of results to return (>= 1).
-            mode: ``"semantic"``, ``"keyword"`` or ``"hybrid"``.
-            score_threshold: Final-score cutoff.
-            similarity_threshold: Raw vector-similarity cutoff.
 
         Returns:
             ``{"hits": [...], "total_candidates": int, "query": str}``
@@ -222,13 +222,94 @@ class Client:
             "score_threshold": score_threshold,
             "similarity_threshold": similarity_threshold,
             "mode": mode,
-            "graph": {"enabled": False, "max_depth": 1, "predicate_whitelist": []},
-            "hybrid_weights": None,
-            "rrf_k": None,
-            "rank_weights": None,
-            "filter": {},
+            "graph": graph if graph is not None else {"enabled": False, "max_depth": 1, "predicate_whitelist": []},
+            "hybrid_weights": hybrid_weights,
+            "rrf_k": rrf_k,
+            "rank_weights": rank_weights,
+            "filter": filter if filter is not None else {},
+            "group_chunks": group_chunks,
+            "entity_focus": entity_focus if entity_focus is not None else [],
         }
         return self._request("POST", "/v1/memory/recall", body)
+
+    def update_memory(
+        self,
+        uuid: str,
+        content: Optional[str] = None,
+        importance: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        expires_at: Optional[Optional[str]] = None,
+    ) -> Dict[str, Any]:
+        """Partially update a memory record (PATCH)."""
+        if not uuid:
+            raise ValueError("update_memory: uuid must be non-empty")
+        body: Dict[str, Any] = {}
+        if content is not None:
+            body["content"] = content
+        if importance is not None:
+            body["importance"] = importance
+        if metadata is not None:
+            body["metadata"] = metadata
+        if tags is not None:
+            body["tags"] = tags
+        if expires_at is not None:
+            body["expires_at"] = expires_at
+        return self._request("PATCH", f"/v1/memory/{_quote(uuid)}", body)
+
+    def merge_memories(
+        self,
+        uuids: List[str],
+        keep_uuid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Merge multiple memories into one; archive the rest."""
+        if not uuids or len(uuids) < 2:
+            raise ValueError("merge_memories: uuids must contain at least 2 entries")
+        body: Dict[str, Any] = {"uuids": uuids}
+        if keep_uuid is not None:
+            body["keep_uuid"] = keep_uuid
+        return self._request("POST", "/v1/memory/merge", body)
+
+    def export_memories(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Export memories matching an optional filter, paginated."""
+        body: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if filter is not None:
+            body["filter"] = filter
+        return self._request("POST", "/v1/memory/export", body)
+
+    def import_memories(
+        self,
+        items: List[Dict[str, Any]],
+        embed: bool = True,
+        on_conflict: str = "skip",
+    ) -> Dict[str, Any]:
+        """Bulk-import memory items."""
+        if items is None:
+            raise ValueError("import_memories: items must not be None")
+        body: Dict[str, Any] = {
+            "items": items,
+            "embed": embed,
+            "on_conflict": on_conflict,
+        }
+        return self._request("POST", "/v1/memory/import", body)
+
+    def merge_entities(
+        self,
+        keep_uuid: str,
+        discard_uuids: List[str],
+    ) -> Dict[str, Any]:
+        """Merge graph entities into ``keep_uuid``, delete the discards."""
+        if not keep_uuid:
+            raise ValueError("merge_entities: keep_uuid must be non-empty")
+        if not discard_uuids:
+            raise ValueError("merge_entities: discard_uuids must not be empty")
+        body = {"keep_uuid": keep_uuid, "discard_uuids": discard_uuids}
+        return self._request("POST", "/v1/graph/entities/merge", body)
 
     def forget(
         self,

@@ -5,14 +5,24 @@
 //! `svc.remember(input)` style. The service *owns* its dependencies so the
 //! HTTP layer (or SDK embedded direct callers) can build one and reuse it.
 
+pub mod chunk;
+pub mod ops_export;
 pub mod ops_forget;
+pub mod ops_import;
+pub mod ops_merge;
 pub mod ops_recall;
 pub mod ops_remember;
+pub mod ops_update;
 pub mod rank;
 
+pub use chunk::{ChunkInfo, ChunkOptions, SplitBy};
+pub use ops_export::{ExportInput, ExportOutput};
 pub use ops_forget::{ForgetInput, ForgetMode, ForgetOutput};
+pub use ops_import::{ConflictStrategy, ImportError, ImportInput, ImportItem, ImportOutput};
+pub use ops_merge::{MergeInput, MergeOutput};
 pub use ops_recall::{RecallHit, RecallInput, RecallOutput};
 pub use ops_remember::{RememberInput, RememberOutput};
+pub use ops_update::UpdateInput;
 pub use rank::RankWeights;
 
 use std::sync::Arc;
@@ -185,6 +195,43 @@ impl MemoryService {
         input: ops_forget::ForgetInput,
     ) -> NovaResult<ops_forget::ForgetOutput> {
         ops_forget::forget(self, input).await
+    }
+
+    /// **导出记忆**：按条件过滤、分页导出记忆记录。
+    pub async fn export(
+        &self,
+        input: ops_export::ExportInput,
+    ) -> NovaResult<ops_export::ExportOutput> {
+        ops_export::export_memories(self, input).await
+    }
+
+    /// **导入记忆**：批量导入记忆记录，支持去重与指定 UUID。
+    pub async fn import(
+        &self,
+        input: ops_import::ImportInput,
+    ) -> NovaResult<ops_import::ImportOutput> {
+        ops_import::import_memories(self, input).await
+    }
+
+    /// **合并记忆**：将多条记忆合并为一条，其余归档。可选指定保留条目的 UUID，
+    /// 否则自动选择最早创建（其次重要性最高）的条目。被归档条目的 relations 表中
+    /// `memory_uuid` 会被重指向到保留条目。
+    pub async fn merge(
+        &self,
+        input: ops_merge::MergeInput,
+    ) -> NovaResult<ops_merge::MergeOutput> {
+        ops_merge::merge_memories(self, input).await
+    }
+
+    /// **更新记忆**：局部更新记忆字段。仅提供非 `None` 的字段会被写入；
+    /// `expires_at: Some(None)` 可清除过期时间。content 变更时自动重新
+    /// 计算哈希并更新 Embedding。
+    pub async fn update(
+        &self,
+        uuid: uuid::Uuid,
+        input: UpdateInput,
+    ) -> NovaResult<MemoryRecord> {
+        ops_update::update_memory(self, uuid, input).await
     }
 
     // --- Direct repository access helpers for tests / advanced callers  ---

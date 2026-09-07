@@ -1,8 +1,3 @@
-//! `remember` — persist a memory, embed it for recall, extract entities/
-//! relations for the graph, and attach tags. This is the **write path**; it
-//! must be idempotent (the underlying MemoryRepository already dedupes by
-//! content hash so repeated identical `remember` calls are free).
-
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -10,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::MemoryService;
+use super::chunk::{ChunkInfo, ChunkOptions, chunk_text};
 use crate::{
     error::{NovaError, NovaResult},
     graph::extractor::RelationCandidate,
@@ -22,37 +18,17 @@ use crate::{
     },
 };
 
-/// Input to [`remember`](crate::memory::MemoryService::remember).
 #[derive(Debug, Clone)]
 pub struct RememberInput<'a> {
-    /// Raw text to remember. The core of the memory; used for both the
-    /// content hash and semantic embedding.
     pub content: &'a str,
-    /// Where this memory came from. Controls how the background forgetting
-    /// policy weights it later.
     pub source: MemorySource,
-    /// Caller-assigned importance ∈ [0.0, 1.0]. 0.0 = ephemeral scratch;
-    /// 1.0 = never-forget user profile info. Default `0.5` is fine for most
-    /// memories.
     pub importance: f32,
-    /// Free-form metadata. Stored verbatim as JSON; queryable in `MemoryFilter`.
     pub metadata: Option<&'a serde_json::Value>,
-    /// Optional hard TTL. `None` = the memory lives until the forgetting
-    /// policy cleans it up based on access/importance.
     pub expires_at: Option<DateTime<Utc>>,
-    /// Caller-provided tags, merged with any tags extracted from `content`
-    /// (e.g. `#hashtags` from the RegexWikiExtractor).
     pub tags: &'a [String],
-    /// If false, skip the embedding step. Useful when:
-    ///   - the caller already has an embedding and will store it via
-    ///     `insert_vector` directly; or
-    ///   - the memory is a small structured metadata row not meant for
-    ///     semantic search.
     pub embed: bool,
-    /// If false, skip entity/relation extraction + graph storage. Use for
-    /// non-narrative content (raw log lines, etc.) where graph pollution is
-    /// a real risk.
     pub extract_graph: bool,
+    pub chunk_options: Option<ChunkOptions>,
 }
 
 impl<'a> Default for RememberInput<'a> {
@@ -66,33 +42,23 @@ impl<'a> Default for RememberInput<'a> {
             tags: &[],
             embed: true,
             extract_graph: true,
+            chunk_options: None,
         }
     }
 }
 
-/// RememberOutput — describes what actually happened on the write side so
-/// callers can log / notify observers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RememberOutput {
     pub uuid: Uuid,
-    /// True when this `remember` call found an identical (by content hash)
-    /// existing memory and returned the previous record instead of inserting
-    /// a new one. Tags, graph edges, and embeddings are still attached for
-    /// the new call, so a `true` here is informational only — not an error.
     pub duplicate: bool,
-    /// True if a new embedding was stored for this memory. False on dupes
-    /// where the vector already existed, or when `embed = false`.
     pub embedding_stored: bool,
-    /// Number of entities upserted to the graph table from this memory.
     pub entities_extracted: usize,
-    /// Number of relation edges upserted from this memory.
     pub relations_extracted: usize,
-    /// Final set of tags attached after merging caller-tags + extractor tags.
     pub tags: Vec<String>,
+    pub chunks: Vec<ChunkInfo>,
 }
 
 pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResult<RememberOutput> {
-    // --- 1. Validation -------------------------------------------------------
     let content = input.content.trim();
     if content.is_empty() {
         return Err(NovaError::validation("remember: content must not be empty"));
@@ -104,35 +70,93 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
         )));
     }
 
-    // --- 2. Extraction (before insert so we have merged tags + candidates) -
-    let extraction = if input.extract_graph {
+    if let Some(ref opts) = input.chunk_options {
+        if opts.enabled {
+            if let Err(msg) = opts.validate() {
+                return Err(NovaError::validation(format!("chunk_options: {msg}")));
+            }
+            let chunk_texts = chunk_text(content, opts);
+            if chunk_texts.len() > 1 {
+                let group_uuid = Uuid::new_v4();
+                let total = chunk_texts.len();
+                let mut chunks = Vec::with_capacity(total);
+                let mut total_entities = 0usize;
+                let mut total_relations = 0usize;
+                let mut any_embedding_stored = false;
+                let mut merged_tags = Vec::new();
+
+                for (i, ct) in chunk_texts.iter().enumerate() {
+                    let chunk_meta = build_chunk_metadata(input.metadata, group_uuid, i, total);
+                    let out = remember_one(
+                        svc, ct, input.tags,
+                        Some(&chunk_meta),
+                        input.source, input.importance,
+                        input.expires_at, input.embed, input.extract_graph,
+                    ).await?;
+                    if i == 0 {
+                        merged_tags = out.tags;
+                    }
+                    total_entities += out.entities_extracted;
+                    total_relations += out.relations_extracted;
+                    if out.embedding_stored {
+                        any_embedding_stored = true;
+                    }
+                    chunks.push(ChunkInfo { uuid: out.uuid, chunk_index: i, chunk_total: total });
+                }
+
+                return Ok(RememberOutput {
+                    uuid: group_uuid,
+                    duplicate: false,
+                    embedding_stored: any_embedding_stored,
+                    entities_extracted: total_entities,
+                    relations_extracted: total_relations,
+                    tags: merged_tags,
+                    chunks,
+                });
+            }
+        }
+    }
+
+    remember_one(
+        svc, content, input.tags, input.metadata,
+        input.source, input.importance,
+        input.expires_at, input.embed, input.extract_graph,
+    ).await
+}
+
+async fn remember_one(
+    svc: &MemoryService,
+    content: &str,
+    tags: &[String],
+    metadata: Option<&serde_json::Value>,
+    source: MemorySource,
+    importance: f32,
+    expires_at: Option<DateTime<Utc>>,
+    embed: bool,
+    extract_graph: bool,
+) -> NovaResult<RememberOutput> {
+    let extraction = if extract_graph {
         svc.extractor.extract(content).await.unwrap_or_default()
     } else {
         Default::default()
     };
 
-    // Merge caller tags + extractor tags, preserving order, dedup.
-    let merged = merge_tags(input.tags, &extraction.tags);
+    let merged = merge_tags(tags, &extraction.tags);
 
-    // --- 3. Insert (or dedupe) the core memory row -------------------------
     let insert_in = crate::storage::memory::InsertMemoryInput {
         content,
-        source: input.source,
-        importance: input.importance,
-        metadata: input.metadata,
-        expires_at: input.expires_at,
+        source,
+        importance,
+        metadata,
+        expires_at,
         tags: &merged,
     };
     let outcome = svc.memory_repo.insert(&svc.database, insert_in).await?;
     let uuid = outcome.uuid();
     let duplicate = outcome.is_duplicate();
 
-    // --- 4. Embedding -------------------------------------------------------
-    // If the memory was a dupe the vector store already has a vector for the
-    // same memory_uuid from a prior call. Skip the embed call in that case
-    // to avoid wasting provider quota.
     let mut embedding_stored = false;
-    if input.embed && !duplicate {
+    if embed && !duplicate {
         let meta = svc.embedding.meta();
         let vec = svc.embedding.embed_one(content).await?;
         if vec.len() != meta.dims {
@@ -147,12 +171,9 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
         embedding_stored = true;
     }
 
-    // --- 5. Graph: upsert entities + relations -----------------------------
     let mut entities_extracted = 0usize;
     let mut relations_extracted = 0usize;
     if !extraction.entities.is_empty() {
-        // Upsert each entity. SqliteEntityRepository::upsert handles name+type
-        // collisions; failures are per-entity so we count successes.
         let mut entity_names: std::collections::HashMap<(String, String), Uuid> =
             std::collections::HashMap::new();
         for ent in &extraction.entities {
@@ -163,19 +184,17 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                     entities_extracted += 1;
                 },
                 Err(e) => {
-                    // Skip single bad entities; log at warn but don't fail remember.
                     tracing::warn!(entity = %ent.name, error = %e, "skip entity upsert");
                 },
             }
         }
 
-        // Then create relations between the entities we actually succeeded on.
         if !extraction.relations.is_empty() && entity_names.len() >= 2 {
             for rel in dedupe_relations(&extraction.relations) {
                 let r = insert_one_relation(&svc.relation_repo, svc, &entity_names, &rel).await;
                 match r {
                     Ok(true) => relations_extracted += 1,
-                    Ok(false) => {}, // idempotent no-op
+                    Ok(false) => {},
                     Err(e) => {
                         tracing::warn!(source = %rel.source_name, target = %rel.target_name, error = %e, "skip relation");
                     },
@@ -191,12 +210,24 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
         entities_extracted,
         relations_extracted,
         tags: merged,
+        chunks: Vec::new(),
     })
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
+fn build_chunk_metadata(
+    base: Option<&serde_json::Value>,
+    group_uuid: Uuid,
+    chunk_index: usize,
+    chunk_total: usize,
+) -> serde_json::Value {
+    let mut meta = base.cloned().unwrap_or_else(|| serde_json::json!({}));
+    if let serde_json::Value::Object(ref mut map) = meta {
+        map.insert("chunk_group".to_string(), serde_json::json!(group_uuid.to_string()));
+        map.insert("chunk_index".to_string(), serde_json::json!(chunk_index));
+        map.insert("chunk_total".to_string(), serde_json::json!(chunk_total));
+    }
+    meta
+}
 
 fn merge_tags(caller: &[String], extractor: &[String]) -> Vec<String> {
     use std::collections::BTreeSet;
@@ -248,9 +279,6 @@ async fn insert_one_relation(
     entity_uuids: &std::collections::HashMap<(String, String), Uuid>,
     rel: &RelationCandidate,
 ) -> NovaResult<bool> {
-    // Best-effort: look up the entity by exact (name, type) first with
-    // `(name, "unknown")` fallback so capitalised-proper-noun entities can
-    // still be matched against the extractor's "unknown" type.
     let lookup = |n: &str| -> Option<Uuid> {
         entity_uuids
             .get(&(n.to_string(), "unknown".to_string()))
@@ -264,7 +292,7 @@ async fn insert_one_relation(
         return Ok(false);
     };
     if src == tgt {
-        return Ok(false); // skip self-loops
+        return Ok(false);
     }
     let conf = rel.confidence.clamp(0.0, 1.0);
     let pred = if rel.predicate.trim().is_empty() {
@@ -289,12 +317,8 @@ async fn insert_one_relation(
     Ok(inserted.is_inserted())
 }
 
-// InsertRelationOutcome::is_inserted() is defined directly on the enum in
-// crate::storage::relation — no local trait shim needed here.
-
 fn dedupe_relations(rels: &[RelationCandidate]) -> Vec<RelationCandidate> {
     use std::collections::BTreeMap;
-    // (src, pred, tgt) → highest confidence candidate.
     let mut best: BTreeMap<(String, String, String), RelationCandidate> = BTreeMap::new();
     for r in rels {
         let key = (r.source_name.clone(), r.predicate.clone(), r.target_name.clone());
@@ -312,8 +336,6 @@ fn dedupe_relations(rels: &[RelationCandidate]) -> Vec<RelationCandidate> {
     best.into_values().collect()
 }
 
-/// Extra helpers for tests: create a service with a mock extractor. Exposed so
-/// the integration tests in M3.x don't have to repeat this boilerplate.
 pub fn service_for_tests(
     database: crate::storage::Database,
     embed_dims: usize,
@@ -335,6 +357,7 @@ mod tests {
     use crate::config::StorageConfig;
     use crate::graph::extractor::{EntityExtractor, RegexWikiExtractor};
     use crate::storage::{Database, MemoryStatus};
+    use crate::memory::chunk::SplitBy;
     use std::sync::Arc;
 
     async fn temp_svc(extractor: bool) -> MemoryService {
@@ -388,8 +411,8 @@ mod tests {
         assert!(!out.duplicate);
         assert!(out.embedding_stored);
         assert_eq!(out.tags, vec!["fruit".to_string()]);
+        assert!(out.chunks.is_empty());
 
-        // Make sure the MemoryRepository returns it.
         let mem = svc.get_memory(out.uuid).await.unwrap();
         assert_eq!(mem.content, "I like strawberries.");
         assert_eq!(mem.importance, 0.7);
@@ -425,11 +448,9 @@ mod tests {
             })
             .await
             .unwrap();
-        // Tags from extractor (#docs) + caller (#v1) both appear.
         assert!(out.tags.iter().any(|t| t == "docs"), "tags = {:?}", out.tags);
         assert!(out.tags.iter().any(|t| t == "v1"));
         assert!(out.entities_extracted >= 3, "entities = {}", out.entities_extracted);
-        // Trae wiki entity, Alice Smith, Kubernetes.
         assert!(out.relations_extracted >= 1);
     }
 
@@ -448,5 +469,107 @@ mod tests {
         assert!(!out.embedding_stored);
         assert_eq!(out.entities_extracted, 0);
         assert_eq!(out.relations_extracted, 0);
+    }
+
+    #[tokio::test]
+    async fn chunking_disabled_behavior_unchanged() {
+        let svc = temp_svc(false).await;
+        let out = svc
+            .remember(RememberInput {
+                content: "regular remember without chunking enabled",
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(out.chunks.is_empty());
+        let mem = svc.get_memory(out.uuid).await.unwrap();
+        assert_eq!(mem.content, "regular remember without chunking enabled");
+    }
+
+    #[tokio::test]
+    async fn chunking_enabled_single_chunk_falls_back() {
+        let svc = temp_svc(false).await;
+        let opts = ChunkOptions {
+            enabled: true,
+            split_by: SplitBy::Paragraph,
+            max_chars: 2000,
+            overlap_chars: 150,
+        };
+        let out = svc
+            .remember(RememberInput {
+                content: "short content that fits in one chunk",
+                chunk_options: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(out.chunks.is_empty(), "single chunk should fall back to regular remember");
+        let mem = svc.get_memory(out.uuid).await.unwrap();
+        assert_eq!(mem.content, "short content that fits in one chunk");
+    }
+
+    #[tokio::test]
+    async fn chunking_enabled_multi_chunk_stores_chunks() {
+        let svc = temp_svc(false).await;
+        let mut text = String::new();
+        for i in 0..10 {
+            if i > 0 {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!("This is paragraph {} in the chunking test for the remember pipeline.", i));
+        }
+        let opts = ChunkOptions {
+            enabled: true,
+            split_by: SplitBy::Paragraph,
+            max_chars: 200,
+            overlap_chars: 30,
+        };
+        let out = svc
+            .remember(RememberInput {
+                content: &text,
+                chunk_options: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!out.chunks.is_empty(), "should produce chunks");
+        assert!(out.chunks.len() > 1, "should produce multiple chunks, got {}", out.chunks.len());
+
+        for ci in &out.chunks {
+            assert!(ci.chunk_total == out.chunks.len());
+            let mem = svc.get_memory(ci.uuid).await.unwrap();
+            let chunk_group = mem.metadata.get("chunk_group").and_then(|v| v.as_str()).unwrap().to_string();
+            assert_eq!(chunk_group, out.uuid.to_string(), "chunk_group should match group_uuid");
+            assert_eq!(
+                mem.metadata.get("chunk_index").and_then(|v| v.as_u64()).unwrap() as usize,
+                ci.chunk_index
+            );
+            assert_eq!(
+                mem.metadata.get("chunk_total").and_then(|v| v.as_u64()).unwrap() as usize,
+                ci.chunk_total
+            );
+        }
+
+        let original = svc.memory_repo.get_by_uuid(&svc.database, out.uuid).await;
+        assert!(original.is_err(), "original group uuid should not be a stored memory");
+    }
+
+    #[tokio::test]
+    async fn chunking_invalid_options_rejected() {
+        let svc = temp_svc(false).await;
+        let opts = ChunkOptions {
+            enabled: true,
+            max_chars: 100,
+            ..Default::default()
+        };
+        let err = svc
+            .remember(RememberInput {
+                content: "some text here",
+                chunk_options: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), crate::error::ErrorCode::Validation);
     }
 }

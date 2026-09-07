@@ -12,12 +12,13 @@ use yq_nova_core::{
     config::StorageConfig,
     embedding::{MockEmbeddingProvider, SharedEmbeddingProvider},
     error::{NovaError, NovaResult},
-    graph::{GraphService, LinkResult, TraverseNode, TraverseOpts},
+    graph::{GraphService, LinkResult, MergeEntitiesInput, TraverseNode, TraverseOpts},
     memory::{
-        ForgetInput, ForgetOutput, MemoryService, RecallOutput, RememberOutput, ops_forget,
-        ops_recall, ops_remember,
+        ConflictStrategy, ExportInput, ForgetInput, ForgetOutput, ImportInput, ImportItem,
+        MemoryService, RecallOutput, RememberOutput, UpdateInput, ops_forget, ops_recall,
+        ops_remember,
     },
-    storage::{Database, entity::EntityRepository},
+    storage::{Database, MemoryRecord, entity::EntityRepository},
 };
 
 use crate::http_client;
@@ -90,6 +91,7 @@ impl EmbeddedNova {
             tags: req.tags.as_ref(),
             embed: req.embed,
             extract_graph: req.extract_graph,
+            chunk_options: req.chunk_options,
         };
         self.memory.remember(input).await
     }
@@ -107,6 +109,8 @@ impl EmbeddedNova {
             rrf_k: req.rrf_k,
             rank_weights: req.rank_weights,
             filter: req.filter,
+            group_chunks: req.group_chunks,
+            entity_focus: req.entity_focus,
         };
         self.memory.recall(input).await
     }
@@ -131,6 +135,86 @@ impl EmbeddedNova {
                 batch_limit: 1,
             })
             .await
+    }
+
+    /// Partial update of a memory record.
+    pub async fn update_memory(
+        &self,
+        uuid: Uuid,
+        req: http_client::UpdateMemoryRequest,
+    ) -> NovaResult<MemoryRecord> {
+        let input = UpdateInput {
+            content: req.content,
+            importance: req.importance,
+            metadata: req.metadata,
+            tags: req.tags,
+            expires_at: req.expires_at,
+        };
+        self.memory.update(uuid, input).await
+    }
+
+    /// Merge multiple memories into one; the rest are archived.
+    pub async fn merge_memories(
+        &self,
+        req: http_client::MergeMemoriesRequest,
+    ) -> NovaResult<http_client::MergeMemoriesResponse> {
+        let input = yq_nova_core::memory::ops_merge::MergeInput {
+            uuids: req.uuids,
+            keep_uuid: req.keep_uuid,
+        };
+        let out = self.memory.merge(input).await?;
+        Ok(http_client::MergeMemoriesResponse {
+            kept_uuid: out.kept_uuid,
+            merged: out.merged,
+            remapped_relations: out.remapped_relations,
+        })
+    }
+
+    /// Export memories matching an optional filter, with pagination.
+    pub async fn export_memories(
+        &self,
+        req: http_client::ExportMemoriesRequest,
+    ) -> NovaResult<http_client::ExportMemoriesResponse> {
+        let input = ExportInput { filter: req.filter, limit: req.limit, offset: req.offset };
+        let out = yq_nova_core::memory::ops_export::export_memories(&self.memory, input).await?;
+        Ok(http_client::ExportMemoriesResponse {
+            count: out.count,
+            offset: out.offset,
+            items: out.items,
+        })
+    }
+
+    /// Import memory items in bulk.
+    pub async fn import_memories(
+        &self,
+        req: http_client::ImportMemoriesRequest,
+    ) -> NovaResult<http_client::ImportMemoriesResponse> {
+        let items: Vec<ImportItem> = req
+            .items
+            .into_iter()
+            .map(|i| ImportItem {
+                content: i.content,
+                uuid: i.uuid,
+                metadata: i.metadata,
+                importance: i.importance,
+                source: i.source,
+                tags: i.tags,
+                expires_at: i.expires_at,
+            })
+            .collect();
+        let on_conflict = if req.on_conflict == "skip" { ConflictStrategy::Skip } else { ConflictStrategy::Skip };
+        let input = ImportInput { items, embed: req.embed, on_conflict };
+        let out = yq_nova_core::memory::ops_import::import_memories(&self.memory, input).await?;
+        Ok(http_client::ImportMemoriesResponse {
+            received: out.received,
+            imported: out.imported,
+            duplicates: out.duplicates,
+            errors: out
+                .errors
+                .into_iter()
+                .map(|e| http_client::ImportError { index: e.index, message: e.message })
+                .collect(),
+        })
     }
 
     // --- graph ------------------------------------------------------------
@@ -179,6 +263,24 @@ impl EmbeddedNova {
         req: http_client::ExtractAndLinkRequest,
     ) -> NovaResult<LinkResult> {
         self.graph.extract_and_link(&req.text, &req.opts).await
+    }
+
+    /// Merge graph entities: move all relations from discard_uuids to
+    /// keep_uuid, then delete the discarded entities.
+    pub async fn merge_entities(
+        &self,
+        req: http_client::MergeEntitiesRequest,
+    ) -> NovaResult<http_client::MergeEntitiesResponse> {
+        let input = MergeEntitiesInput {
+            keep_uuid: req.keep_uuid,
+            discard_uuids: req.discard_uuids,
+        };
+        let out = self.graph.merge_entities(input).await?;
+        Ok(http_client::MergeEntitiesResponse {
+            kept_uuid: out.kept_uuid,
+            merged: out.merged,
+            remapped_relations: out.remapped_relations,
+        })
     }
 
     // --- meta -------------------------------------------------------------
