@@ -1,26 +1,23 @@
-"""Tiny smoke test for the yq-nova Python client (no live server required)."""
 
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from yq_nova import Client, NovaApiError  # noqa: E402
-
+from yq_nova import Client, NovaApiError  
 
 def test_imports_and_construction():
     client = Client("http://127.0.0.1:7999")
     assert client.base_url == "http://127.0.0.1:7999"
-    # trailing slash is stripped
+
     client2 = Client("http://127.0.0.1:7999/")
     assert client2.base_url == "http://127.0.0.1:7999"
-    # empty base raises
+
     try:
         Client("")
         assert False, "expected ValueError for empty base_url"
     except ValueError:
         pass
-
 
 def test_error_type_attributes():
     err = NovaApiError("not_found", "boom", 404, trace_id="abc")
@@ -29,10 +26,9 @@ def test_error_type_attributes():
     assert err.status == 404
     assert err.trace_id == "abc"
 
-
 def test_client_side_validation():
     client = Client("http://127.0.0.1:7999")
-    # These must raise without touching the network.
+
     for call in (
         lambda: client.remember(""),
         lambda: client.recall(""),
@@ -48,7 +44,6 @@ def test_client_side_validation():
             assert False, f"expected ValueError for {call}"
         except ValueError:
             pass
-
 
 if __name__ == "__main__":
     test_imports_and_construction()

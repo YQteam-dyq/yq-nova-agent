@@ -1,18 +1,3 @@
-//! `forget` — soft- or hard-delete memories; optionally cascade to attached
-//! vectors and orphaned graph entities/relations.
-//!
-//! Design rules (kept small on purpose):
-//!   * **By uuid**: forget a specific memory uuid (returns NotFound if missing).
-//!   * **By filter**: forget everything that matches a `MemoryFilter` (e.g.
-//!     older than X days, source=System, importance<0.2). Used for batch TTL
-//!     cleanup in the background job system (M7).
-//!   * **Soft delete by default**: sets `status = deleted` so the record is
-//!     still there for audits, but `list`/`recall` won't return it (filters
-//!     exclude deleted rows unless the caller explicitly opts in).
-//!   * **Hard delete on request**: removes the rows entirely (cascades through
-//!     embeddings FK, memory_tags FK) so storage is reclaimed.
-//!
-//! MVP intentionally has no "undo" — that's v0.3 with a recycle bin table.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,23 +11,18 @@ use crate::{
     },
 };
 
-/// What should `forget` actually do?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgetMode {
-    /// Default: flip status to `deleted`; keep the row for audits. The row
-    /// will never appear in recall/list but can be queried directly.
+
     #[default]
     Soft,
-    /// Actually remove the row from SQLite. Embedding + tag rows are removed
-    /// automatically via FK `ON DELETE CASCADE` (see `001_init.sql`).
+
     Hard,
-    /// Flip status to `archived` instead of `deleted`. Used for explicit
-    /// "I want to keep this but not surface it by default" workflows.
+
     Archive,
 }
 
-/// One thing to forget: either a specific uuid, or a filter match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ForgetTarget {
@@ -50,20 +30,14 @@ pub enum ForgetTarget {
     Filter(MemoryFilter),
 }
 
-/// Input to [`MemoryService::forget`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ForgetInput {
     pub target: ForgetTarget,
     pub mode: ForgetMode,
-    /// If true, also scan the entity/relation tables after the memory is gone
-    /// and garbage-collect any entities with zero in-degree + zero out-degree
-    /// that were last-modified by this forget operation. MVP only implements
-    /// "no orphans yet" — set to true safely even if nothing is done.
+
     pub gc_graph: bool,
-    /// Upper bound on how many rows a `Filter` target is allowed to delete in
-    /// one call. Protects against `MemoryFilter::default()` (all rows) by
-    /// mistake. Default 500 is plenty for a single background-job run.
+
     pub batch_limit: usize,
 }
 
@@ -80,33 +54,29 @@ impl Default for ForgetInput {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ForgetOutput {
-    /// Number of memory rows affected by this call.
+
     pub affected_memories: usize,
-    /// When `mode == Hard`: number of embedding BLOB rows also removed.
-    /// (Memory FK has cascade; counted heuristically for Soft/Archive as 0.)
+
     pub cascade_embeddings: usize,
-    /// When `gc_graph = true`: number of orphan entity rows pruned.
+
     pub gc_entities: usize,
-    /// When `gc_graph = true`: number of orphan relation rows pruned.
+
     pub gc_relations: usize,
-    /// When `mode == Hard` and `gc_graph == true`: number of relation rows
-    /// deleted because their `memory_uuid` referenced a forgotten memory.
+
     pub relations_cleaned: usize,
-    /// Actual mode applied (handy for echo/audit logs).
+
     pub mode: ForgetMode,
 }
 
 pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<ForgetOutput> {
-    // --- 1. Determine affected uuids (respect batch_limit for Filter) -------
+
     let uuids: Vec<Uuid> = match input.target {
         ForgetTarget::One(uuid) => {
-            // Verify existence up-front for Soft/Archive modes so NotFound is
-            // returned rather than a silent 0-row update.
+
             match svc.memory_repo.get_by_uuid(&svc.database, uuid).await {
                 Ok(_) => vec![uuid],
                 Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => {
-                    // Hard delete also returns NotFound for consistency with
-                    // the other modes (no row existed to delete).
+
                     return Err(e);
                 },
                 Err(e) => return Err(e),
@@ -117,8 +87,7 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
             if limit == 0 {
                 return Err(NovaError::validation("forget: batch_limit must be >= 1"));
             }
-            // Use the repository's list to pick uuids. Pick 1 extra row to
-            // detect "too many matches" and warn (though we still cap at limit).
+
             let rows = svc.memory_repo.list(&svc.database, &f, limit + 1, 0).await?;
             let capped = rows.len().min(limit);
             rows.into_iter().take(capped).map(|r| r.uuid).collect()
@@ -129,7 +98,6 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
         return Ok(ForgetOutput { mode: input.mode, ..Default::default() });
     }
 
-    // --- 2. Apply the per-uuid action ---------------------------------------
     let mut affected = 0usize;
     let mut relations_cleaned = 0usize;
     for u in &uuids {
@@ -145,8 +113,7 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
                     relations_cleaned +=
                         svc.relation_repo.delete_by_memory(&svc.database, *u).await?;
                 }
-                // Delete vector row first (FK cascade could delete it too but
-                // doing it explicitly means we can count removed embeddings).
+
                 svc.vector_store.delete_vector(*u).await.ok();
                 svc.memory_repo.delete(&svc.database, *u).await?;
             },
@@ -154,24 +121,17 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
         affected += 1;
     }
 
-    // --- 3. Optional graph GC -----------------------------------------------
     let mut gc_entities = 0usize;
     let mut gc_relations = 0usize;
     if input.gc_graph {
-        // For MVP, best-effort scan: delete any entity whose (outgoing + incoming)
-        // count is zero and has no metadata or wikilinks we want to keep.
-        // Keep it conservative: only delete entities with entity_type == "unknown"
-        // (capitalised-proper-noun byproducts) to avoid wiping user-curated
-        // [[Wiki]] entries.
+
         let (ent, rel) = gc_orphan_entities(svc).await.unwrap_or((0, 0));
         gc_entities = ent;
         gc_relations = rel;
     }
 
-    // embeddings cascade count (hard delete only, estimated from deleted
-    // memory uuids' vector rows already cleared). For Soft/Archive always 0.
     let cascade_embeddings = match input.mode {
-        ForgetMode::Hard => affected, // rough upper bound; exact would need a separate count.
+        ForgetMode::Hard => affected, 
         _ => 0,
     };
 
@@ -185,16 +145,9 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     })
 }
 
-/// Remove entities that have no relations AND type "unknown". Conservative by
-/// design — user-created [[Wiki]] entities survive even if orphaned so the
-/// user's graph intent is preserved across forget calls that temporarily
-/// remove the only memory referencing them.
 async fn gc_orphan_entities(svc: &MemoryService) -> NovaResult<(usize, usize)> {
     use crate::storage::entity::EntityRecord;
 
-    // 1) List ALL entities (pessimistic; MVP expects 10s to 1000s of entities,
-    // which is fine). For each entity, count out + in relations. If 0 and type
-    // == "unknown", delete it.
     let all: Vec<EntityRecord> =
         svc.entity_repo.list(&svc.database, None, None, i64::MAX as usize, 0).await?;
 
@@ -279,7 +232,6 @@ mod tests {
         assert_eq!(out.affected_memories, 1);
         assert_eq!(out.mode, ForgetMode::Soft);
 
-        // Row still exists via direct get, but status is Deleted.
         let mem = svc.get_memory(a.uuid).await.unwrap();
         assert_eq!(mem.status, MemoryStatus::Deleted);
     }
@@ -291,7 +243,7 @@ mod tests {
             .remember(RememberInput { content: "one off", importance: 0.1, ..Default::default() })
             .await
             .unwrap();
-        // Sanity: exists before
+
         assert!(svc.get_memory(a.uuid).await.is_ok());
 
         let out = svc
@@ -354,7 +306,7 @@ mod tests {
             })
             .await
             .unwrap();
-        // Exactly 3 rows even though 10 match the (empty-except-min) filter.
+
         assert_eq!(out.affected_memories, 3);
     }
 

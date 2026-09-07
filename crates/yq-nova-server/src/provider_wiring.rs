@@ -1,12 +1,3 @@
-//! Embedding 配置 → Provider 实例化的 glue 层。
-//!
-//! 这里把 `yq_nova_core::config::EmbeddingConfig`（用户 TOML/env 配置）映射为
-//! `yq_nova_core::embedding::EmbeddingProvider`（真实可用的 trait object）。
-//!
-//! 规则：
-//! - `provider = mock` / 全部 key 都没有 api_key + base_url 走通：回退 MockEmbeddingProvider（开发环境/测试用）。
-//! - 其它走 `config.openai_compatible["default_provider"]` → OpenAiCompatProvider。
-//! - FastEmbed 等本地模型：MVP 占位（feature-gated），检测到就报错提示 --features。
 
 use std::sync::Arc;
 
@@ -21,9 +12,6 @@ use yq_nova_core::{
 #[cfg(feature = "fastembed")]
 use yq_nova_core::embedding::{EmbeddingProvider, FastEmbedProvider, FastEmbedProviderConfig};
 
-/// 给定一个 EmbeddingConfig，解析成 SharedEmbeddingProvider（Arc<dyn ...>）。
-///
-/// 输出 provider 名称 + 实际 provider 句柄 + 可选 embedding 维度（用于初始化 vector_store）。
 pub fn build_default_provider(
     cfg: &EmbeddingConfig,
 ) -> NovaResult<(String, SharedEmbeddingProvider, usize)> {
@@ -32,7 +20,6 @@ pub fn build_default_provider(
         return Err(NovaError::config_msg("embedding.default_provider must be non-empty"));
     }
 
-    // --- 1. mock provider: 显式绕过任何网络请求 ---
     if key.eq_ignore_ascii_case("mock") {
         let dims = cfg
             .openai_compatible
@@ -44,7 +31,6 @@ pub fn build_default_provider(
         return Ok(("mock".into(), Arc::new(mock), dims));
     }
 
-    // --- 2. OpenAI-compatible provider ---
     if let Some(openai_cfg) = cfg.openai_compatible.get(&key) {
         let dims = openai_cfg.dimensions.max(1);
         let embed_config = OpenAiCompatConfig {
@@ -63,7 +49,6 @@ pub fn build_default_provider(
         return Ok((key, Arc::new(provider), dims));
     }
 
-    // --- 3. FastEmbed provider (local ONNX) ---
     if let Some(fastembed_cfg) = cfg.fastembed_local.get(&key) {
         return build_fastembed(fastembed_cfg, &key);
     }
@@ -76,10 +61,6 @@ pub fn build_default_provider(
     )))
 }
 
-/// 构造 FastEmbed 本地 ONNX 提供者。
-///
-/// 启用 `fastembed` feature 时真正加载模型；未启用时返回配置错误，提示
-/// 需要 `--features fastembed`。
 fn build_fastembed(
     cfg: &FastEmbedConfig,
     key: &str,
@@ -114,8 +95,6 @@ fn build_fastembed_impl(
     )))
 }
 
-/// 把所有在配置里定义的 provider 都注册到 EmbeddingRegistry，方便 M10 多 provider 切换。
-/// 默认 provider 单独返回（最常用）。
 pub fn build_registry(
     cfg: &EmbeddingConfig,
 ) -> NovaResult<(String, SharedEmbeddingProvider, usize, EmbeddingRegistry)> {
@@ -139,7 +118,7 @@ pub fn build_registry(
             },
         }
     }
-    // Always register mock provider so callers can fall back to it.
+
     let mock_dims = cfg.openai_compatible.get("default").map(|p| p.dimensions).unwrap_or(1536);
     reg.insert(String::from("mock"), Arc::new(MockEmbeddingProvider::new(mock_dims)));
 

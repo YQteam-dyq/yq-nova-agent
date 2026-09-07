@@ -1,9 +1,3 @@
-//! FTS5 keyword search integration.
-//!
-//! FTS5 stores *no* content itself — it's backed by the `memory_items`
-//! table via `content='memory_items'` in `002_fts.sql`, and we keep the
-//! index in sync via triggers so the caller never has to write to
-//! `memory_fts` manually.
 
 use async_trait::async_trait;
 
@@ -13,15 +7,12 @@ use crate::{
     storage::{Database, MemoryStatus},
 };
 
-/// Retrieval result from a keyword/FTS search. `score` is normalised to
-/// `[0.0, 1.0]` where `1.0` is the best match in this batch.
 #[derive(Debug, Clone)]
 pub struct KeywordHit {
     pub uuid: Uuid,
-    /// Normalised score ∈ [0, 1]; 1 = best match in the returned set.
+
     pub score: f32,
-    /// Raw BM25 as returned by FTS5 (lower = better). Exposed for debug /
-    /// re-rankers that want to combine with external signals.
+
     pub raw_bm25: f32,
 }
 
@@ -46,15 +37,7 @@ impl SqliteFts5Store {
 }
 
 impl SqliteFts5Store {
-    /// FTS5 syntax rules are fussy (bare `-` or `""` tokens etc.). Rather
-    /// than invent a query language, we keep this intentionally minimal:
-    /// split the user's query on whitespace, prefix every term with `*`,
-    /// and AND them together with ` AND `.  This gives a predictable
-    /// prefix + multi-word behaviour without surprising parse errors.
-    ///
-    /// Callers that know what they're doing can still pass raw FTS5
-    /// operators directly (e.g. `"pineapple OR banana"`); we leave their
-    /// query untouched if they include any FTS5 meta-char.
+
     fn normalise_query(q: &str) -> String {
         let trimmed = q.trim();
         if trimmed.is_empty() {
@@ -63,8 +46,7 @@ impl SqliteFts5Store {
         let has_meta = trimmed
             .chars()
             .any(|c| matches!(c, '"' | '(' | ')' | '*' | 'O' | 'R' | 'A' | 'N' | 'D' | 'X'));
-        // Heuristic: treat tokens that look like FTS5 operators as-is.
-        // (Real FTS5 syntax check is expensive; this covers 99% of cases.)
+
         if has_meta
             && (trimmed.contains(" OR ")
                 || trimmed.contains(" AND ")
@@ -81,8 +63,7 @@ impl SqliteFts5Store {
         tokens
             .iter()
             .map(|t| {
-                // Escape any single FTS5 meta-char inside the token by
-                // quoting the whole token.
+
                 if t.chars().any(|c| matches!(c, '-' | '+' | '^' | ':' | '*' | '"' | '(' | ')')) {
                     let escaped = t.replace('"', "\"\"");
                     format!("\"{escaped}\"*")
@@ -115,7 +96,6 @@ impl Fts5Store for SqliteFts5Store {
             return Err(NovaError::validation_msg("keyword_search statuses must be non-empty"));
         }
 
-        // Build status-IN clause.
         let placeholders: Vec<&str> = statuses.iter().map(|_| "?").collect();
         let in_clause = placeholders.join(",");
 
@@ -142,8 +122,6 @@ impl Fts5Store for SqliteFts5Store {
             .await
             .map_err(|e| NovaError::validation_msg(format!("fts5 query invalid ({q:?}): {e}")))?;
 
-        // BM25: lower = better.  Normalise into [0, 1] so later rankers can
-        // treat keyword score the same way as cosine similarity.
         let raw: Vec<(Uuid, f32)> = rows
             .into_iter()
             .map(|(u, b)| (Uuid::parse_str(&u).map_err(NovaError::storage).unwrap(), b as f32))
@@ -160,7 +138,7 @@ impl Fts5Store for SqliteFts5Store {
                 let norm = if range <= 0.0 {
                     1.0f32
                 } else {
-                    // 1 - (b - min)/range: lower BM25 maps closer to 1.0
+
                     let r: f32 = 1.0 - (b - min_bm) / range;
                     r.clamp(0.0_f32, 1.0_f32)
                 };
@@ -171,9 +149,6 @@ impl Fts5Store for SqliteFts5Store {
     }
 }
 
-// ============================================================
-// Tests
-// ============================================================
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,7 +214,7 @@ mod tests {
         let all_smoothie =
             store.keyword_search(&db, "smoothie", 10, &[MemoryStatus::Active]).await.unwrap();
         assert_eq!(all_smoothie.len(), 2);
-        // Scores are 1.0 and something smaller.
+
         assert!(all_smoothie[0].score >= all_smoothie[1].score);
     }
 

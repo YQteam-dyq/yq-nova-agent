@@ -1,4 +1,3 @@
-//! Memory repository backed by `memory_items` + `memory_tags` + `tags`.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -11,10 +10,6 @@ use crate::{
     error::{NovaError, NovaResult},
     storage::{Database, MemoryFilter, MemorySource, MemoryStatus, Repository},
 };
-
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
@@ -81,10 +76,6 @@ enum BindValue {
     Real(f64),
 }
 
-// -----------------------------------------------------------------------------
-// Trait
-// -----------------------------------------------------------------------------
-
 #[async_trait]
 pub trait MemoryRepository: Repository<MemoryRecord> {
     async fn insert(
@@ -131,10 +122,6 @@ pub trait MemoryRepository: Repository<MemoryRecord> {
     ) -> NovaResult<Vec<MemoryRecord>>;
     async fn count(&self, db: &Database, filter: &MemoryFilter) -> NovaResult<i64>;
 }
-
-// -----------------------------------------------------------------------------
-// Sqlite impl
-// -----------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct SqliteMemoryRepository;
@@ -446,9 +433,6 @@ struct BuiltQuery {
 }
 
 fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
-    // Strategy for `tags_all`:
-    //   JOIN + WHERE-IN + GROUP BY + HAVING(COUNT DISTINCT = N).
-    // All placeholders use anonymous `?` so binds order trivially maps.
 
     let cols_list: &str = "m.id, m.uuid, m.content, m.content_hash, m.metadata_json, m.source, \
          m.importance, m.access_count, m.last_accessed, m.created_at, m.expires_at, m.status";
@@ -508,8 +492,7 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
         binds.push(BindValue::Int(lt));
         where_clauses.push("m.access_count < ?".into());
     }
-    // "last_accessed" staleness checks: fall back to created_at when NULL so
-    // rows that have never been accessed still age out.
+
     if let Some(before) = filter.last_accessed_before {
         binds.push(BindValue::Int(before.timestamp()));
         where_clauses.push("COALESCE(m.last_accessed, m.created_at) < ?".into());
@@ -694,10 +677,6 @@ pub(crate) async fn list_tags_of_memory(
 ) -> NovaResult<Vec<String>> {
     load_tags_for(pool, memory_uuid).await
 }
-
-// -----------------------------------------------------------------------------
-// Tests
-// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -1,9 +1,3 @@
-//! Background jobs: TTL expiry + staleness/forgetting policy + cron ticker.
-//!
-//! Jobs don't run in-process in tests (they require tokio runtime + a real DB
-//! pool). Instead each job exposes `run_once(...)` as a deterministic async
-//! function that the scheduler calls each tick; tests call `run_once` directly
-//! so they don't have to wall-clock sleep.
 
 use std::{
     sync::Arc,
@@ -22,8 +16,6 @@ use yq_nova_core::{
     storage::{MemoryFilter, MemoryStatus},
 };
 
-/// Returned by each `run_once` so logs + metrics (future) can describe what
-/// actually happened.
 #[derive(Debug, Default, Clone)]
 pub struct JobStats {
     pub ttl_expired: u64,
@@ -31,11 +23,6 @@ pub struct JobStats {
     pub stale_deleted: u64,
 }
 
-// ============== TTL expiry job ==============================================
-
-/// Mark `memory_items` whose `expires_at < now` AND are currently `Active` as
-/// `Expired`. Runs in a single SQL UPDATE so it's efficient even if tens of
-/// thousands of rows expire at once.
 pub async fn expire_ttl_once(memory: &MemoryService) -> NovaResult<u64> {
     let now_secs = Utc::now().timestamp();
     let pool = &memory.database.pool;
@@ -61,11 +48,6 @@ pub async fn expire_ttl_once(memory: &MemoryService) -> NovaResult<u64> {
     Ok(affected)
 }
 
-// ============== Staleness / forgetting policy job ============================
-
-/// Applies `ForgettingConfig`: memories whose `last_accessed` is older than
-/// `stale_after` *and* whose `importance` is below
-/// `stale_importance_threshold` get archived or deleted.
 pub async fn collect_garbage_once(
     memory: &MemoryService,
     cfg: &ForgettingConfig,
@@ -73,8 +55,7 @@ pub async fn collect_garbage_once(
     if !cfg.enabled {
         return Ok((0, 0));
     }
-    // Treat "never accessed" as "last_accessed = created_at" by using the
-    // COALESCE filter built into MemoryFilter.
+
     let stale_before: DateTime<Utc> = Utc::now() - cfg.stale_after;
     let filter = MemoryFilter {
         status_in: Some(vec![MemoryStatus::Active]),
@@ -106,11 +87,6 @@ pub async fn collect_garbage_once(
     Ok((archived, deleted))
 }
 
-// ============== Ticker / scheduler ==========================================
-
-/// Drives `expire_ttl_once` + `collect_garbage_once` in a loop.
-///
-/// Exits cleanly when `cancel` is triggered (SIGINT/SIGTERM from main.rs).
 pub async fn run_job_loop(
     memory: MemoryService,
     forgetting_cfg: ForgettingConfig,
@@ -121,15 +97,8 @@ pub async fn run_job_loop(
     let mut tick = tokio::time::interval(ttl_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Concurrency guard: if a single tick's work (e.g. forgetting over 100k
-    // rows) takes longer than `ttl_interval`, we *skip* subsequent ticks until
-    // the in-flight run finishes. 1 permit ensures at most 1 run at a time.
     let busy = Arc::new(Semaphore::new(1));
 
-    // GC cadence is `forgetting_cfg.check_interval` (default 600s), which is
-    // typically much slower than the TTL ticker.  Rather than spawn a second
-    // independent task (which adds shutdown bookkeeping), we simply remember
-    // the last time GC ran and compare on every fast tick.
     let gc_interval = forgetting_cfg.check_interval;
     let mut last_gc: Option<Instant> = None;
 
@@ -147,11 +116,9 @@ pub async fn run_job_loop(
                         continue;
                     }
                 };
-                // Release the permit when the tick body returns (even on panic
-                // via Semaphore's RAII guard).
+
                 let _permit_guard = permit;
 
-                // ---- TTL (always runs, cheap SQL single UPDATE) ----
                 let started = std::time::SystemTime::now();
                 match expire_ttl_once(&memory).await {
                     Ok(n) => stats.ttl_expired += n,
@@ -161,7 +128,6 @@ pub async fn run_job_loop(
                     debug!(job = "ttl", took_ms = d.as_millis() as u64, "tick finished");
                 }
 
-                // ---- GC (runs at forgetting_cfg.check_interval cadence) ----
                 let gc_due = match last_gc {
                     None => true,
                     Some(t) => t.elapsed() >= gc_interval,
@@ -193,9 +159,6 @@ pub async fn run_job_loop(
     }
 }
 
-/// Thin wrapper: spawn the job loop on the tokio runtime. Returns a
-/// `JoinHandle<JobStats>` that resolves once cancellation finishes. Caller
-/// awaits it after the HTTP server joins.
 pub fn spawn_job_loop(
     memory: MemoryService,
     forgetting_cfg: ForgettingConfig,
@@ -205,7 +168,6 @@ pub fn spawn_job_loop(
     tokio::spawn(run_job_loop(memory, forgetting_cfg, ttl_interval, cancel))
 }
 
-/// Simple helper so callers can trivially construct a CancellationToken.
 pub fn new_cancel_token() -> CancellationToken {
     CancellationToken::new()
 }
@@ -257,7 +219,7 @@ mod tests {
         let (db, memory) = setup("ttl").await;
 
         let repo = SqliteMemoryRepository::new();
-        // Remember 3 items, then manually backdate 2 of them to have expired.
+
         let mut uuids = Vec::new();
         for (i, content) in ["a", "b", "c"].into_iter().enumerate() {
             let out = memory
@@ -282,19 +244,15 @@ mod tests {
         let expired = expire_ttl_once(&memory).await.unwrap();
         assert_eq!(expired, 2);
 
-        // No repeat work on second run.
         let again = expire_ttl_once(&memory).await.unwrap();
         assert_eq!(again, 0);
 
-        // Direct status check.
         for (i, u) in uuids.iter().enumerate() {
             let rec = repo.get_by_uuid(&db, *u).await.expect("get");
             let want = if i < 2 { MemoryStatus::Expired } else { MemoryStatus::Active };
             assert_eq!(rec.status, want, "i={i}");
         }
 
-        // Recall excludes expired. Use a wide filter so status != deleted still
-        // includes Active, but we filter to Active explicitly to exclude Expired.
         let f = yq_nova_core::storage::MemoryFilter {
             status_in: Some(vec![yq_nova_core::storage::MemoryStatus::Active]),
             ..Default::default()
@@ -325,8 +283,6 @@ mod tests {
             .unwrap()
             .uuid;
 
-        // Force last_accessed way into the past (never accessed = created_at,
-        // so backdate created_at too so the staleness window catches it).
         sqlx::query("UPDATE memory_items SET last_accessed = ?, created_at = ? WHERE uuid = ?")
             .bind((Utc::now() - ChronoDur::days(120)).timestamp())
             .bind((Utc::now() - ChronoDur::days(120)).timestamp())
@@ -346,7 +302,6 @@ mod tests {
         assert_eq!(archived, 1);
         assert_eq!(deleted, 0);
 
-        // Second run is a no-op because status is no longer Active.
         let (a2, d2) = collect_garbage_once(&memory, &cfg).await.unwrap();
         assert_eq!((a2, d2), (0, 0));
     }
@@ -394,11 +349,6 @@ mod tests {
         assert_eq!((a, d), (0, 0));
     }
 
-    /// Verify `Database::close()` writes everything back to the main DB file.
-    /// This is the closest integration test we can do without actually
-    /// spawning a unix process + sending SIGTERM: write 10 memories,
-    /// close the DB, drop every handle, reopen the same file path,
-    /// and confirm all 10 are still readable via recall.
     #[tokio::test]
     async fn shutdown_close_db_preserves_data() {
         use yq_nova_core::storage::Database;
@@ -424,7 +374,6 @@ mod tests {
             db.close().await.unwrap();
         }
 
-        // Reopen the *same* DB path with a fresh pool and count memories.
         let db2 = Database::open(mem_storage).await.unwrap();
         let cnt: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM memory_items WHERE status = ? AND content LIKE 'memory #%'",
@@ -435,14 +384,10 @@ mod tests {
         .unwrap();
         assert_eq!(cnt, 10);
         db2.close().await.unwrap();
-        // Silence unused: path kept for debug only
+
         let _ = path;
     }
 
-    /// The scheduler loop uses a `Semaphore(1)` guard so a slow tick never
-    /// stacks onto the previous one.  Make sure the second `try_acquire_owned`
-    /// on the same Semaphore returns Err immediately (this is what drives the
-    /// "skip" branch in run_job_loop).
     #[tokio::test]
     async fn busy_guard_skips_next_tick_when_inflight() {
         use tokio::sync::Semaphore;

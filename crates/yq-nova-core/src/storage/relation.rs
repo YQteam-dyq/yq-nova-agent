@@ -1,13 +1,3 @@
-//! Relation repository backed by the `relations` table.
-//!
-//! Relations are directed, labelled edges: `(source) --[predicate]--> (target)`
-//! with an optional confidence score. FK constraints guarantee referential
-//! integrity for both endpoints; inserting a relation referencing a
-//! non-existent entity returns a `Validation` error so callers know to
-//! upsert the entity first.  M2 ships a BFS *placeholder* impl that is
-//! bounded to small graphs (in-memory BFS over all edges of a node) — good
-//! enough for MVP depth ≤ 3 traversals; a recursive-CTE variant lands in
-//! M8 if/when we need to scale beyond tiny subgraphs.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,61 +14,53 @@ use crate::{
     },
 };
 
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
-
-/// 关系记录：图谱中的有向标签边 `source --[predicate]--> target`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationRecord {
-    /// 内部自增 ID。
+
     pub id: i64,
-    /// 对外暴露的关系 UUID。
+
     pub uuid: Uuid,
-    /// 起点实体 UUID。
+
     pub source_uuid: Uuid,
-    /// 终点实体 UUID。
+
     pub target_uuid: Uuid,
-    /// 谓词/关系类型，如 "mentions"、"knows"、"works_at"。
+
     pub predicate: String,
-    /// 抽取置信度，合法范围 [0.0, 1.0]。
+
     pub confidence: f32,
-    /// 可选：产生该关系的记忆 UUID（用于从 memory 反查关联实体）。
+
     pub memory_uuid: Option<Uuid>,
-    /// 自定义元数据 JSON。
+
     pub metadata: serde_json::Value,
-    /// 创建时间（UTC）。
+
     pub created_at: DateTime<Utc>,
 }
 
-/// 关系插入输入。
 #[derive(Debug, Clone)]
 pub struct InsertRelationInput<'a> {
-    /// 起点实体 UUID（必须已存在，否则外键校验失败）。
+
     pub source_uuid: Uuid,
-    /// 终点实体 UUID（必须已存在，且不能与 source 相同）。
+
     pub target_uuid: Uuid,
-    /// 谓词，非空；空字符串会被回退为 "mentions"。
+
     pub predicate: &'a str,
-    /// 置信度，内部会 clamp 到 [0.0, 1.0]。
+
     pub confidence: f32,
-    /// 可选：关联的记忆 UUID。
+
     pub memory_uuid: Option<Uuid>,
-    /// 可选元数据 JSON；None 表示插入空对象 `{}`。
+
     pub metadata: Option<&'a serde_json::Value>,
-    /// 若为 true，则以 `(source, predicate, target)` 为唯一键幂等插入；
-    /// 已存在时按置信度决定更新或跳过。
+
     pub idempotent: bool,
 }
 
-/// `RelationRepository::insert` 的结果，携带关系 UUID。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertRelationOutcome {
-    /// 新行被插入（idempotent=false，或 idempotent=true 且无匹配边）。
+
     Inserted(Uuid),
-    /// 已存在匹配边，且按幂等路径更新了置信度/元数据。
+
     Updated(Uuid),
-    /// 已存在置信度 ≥ 请求值的匹配边，未做任何变更。
+
     Unchanged(Uuid),
 }
 
@@ -95,14 +77,9 @@ impl InsertRelationOutcome {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Trait
-// -----------------------------------------------------------------------------
-
 #[async_trait]
 pub trait RelationRepository: Repository<RelationRecord> {
-    /// Insert a new edge. Validates that both endpoint entities exist and
-    /// that `confidence ∈ [0, 1]` and `predicate` is non-empty.
+
     async fn insert(
         &self,
         db: &Database,
@@ -113,9 +90,6 @@ pub trait RelationRepository: Repository<RelationRecord> {
     async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
     async fn delete_by_memory(&self, db: &Database, memory_uuid: Uuid) -> NovaResult<usize>;
 
-    /// Return all edges originating from `entity_uuid` (optionally matching
-    /// only a specific `predicate`). Direction is OUT; for incoming edges
-    /// use `list_incoming`.
     async fn list_outgoing(
         &self,
         db: &Database,
@@ -124,7 +98,6 @@ pub trait RelationRepository: Repository<RelationRecord> {
         limit: usize,
     ) -> NovaResult<Vec<RelationRecord>>;
 
-    /// Return all edges targeting `entity_uuid`.
     async fn list_incoming(
         &self,
         db: &Database,
@@ -133,10 +106,6 @@ pub trait RelationRepository: Repository<RelationRecord> {
         limit: usize,
     ) -> NovaResult<Vec<RelationRecord>>;
 
-    /// Naive in-memory BFS placeholder. Good for small MVP traversals with
-    /// `max_depth ≤ 3`; for larger subgraphs, upgrade to a SQLite
-    /// recursive CTE that avoids pulling the entire adjacency list into
-    /// the application process.
     async fn bfs_traverse(
         &self,
         db: &Database,
@@ -148,10 +117,6 @@ pub trait RelationRepository: Repository<RelationRecord> {
         min_confidence: f32,
     ) -> NovaResult<Vec<TraverseNode>>;
 }
-
-// -----------------------------------------------------------------------------
-// Sqlite impl
-// -----------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct SqliteRelationRepository;
@@ -196,10 +161,7 @@ impl RelationRepository for SqliteRelationRepository {
         }
 
         let pool = &db.pool;
-        // FK validation: both endpoints must exist. We check explicitly
-        // (instead of relying on sqlite's FK error) so we can surface a
-        // stable, testable error message identifying which endpoint is
-        // missing.
+
         let src_exists: Option<(String,)> =
             sqlx::query_as("SELECT uuid FROM entities WHERE uuid = ?1")
                 .bind(input.source_uuid.to_string())
@@ -465,7 +427,7 @@ impl RelationRepository for SqliteRelationRepository {
                     .map_err(|e| NovaError::storage_msg(format!("bad nb uuid: {e}")))?;
                 let nb_ent: EntityRecord = match entity_repo.get_by_uuid(db, nb_uuid).await {
                     Ok(e) => e,
-                    Err(_) => continue, // orphan edge — skip (FKs should prevent this)
+                    Err(_) => continue, 
                 };
                 let mut nb_path = path.clone();
                 nb_path.push(nb_uuid);
@@ -480,10 +442,6 @@ impl RelationRepository for SqliteRelationRepository {
         Ok(results)
     }
 }
-
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
 
 fn row_to_relation(row: &sqlx::sqlite::SqliteRow) -> NovaResult<RelationRecord> {
     let id: i64 = row.try_get("id").map_err(NovaError::storage)?;
@@ -526,10 +484,6 @@ fn row_to_relation(row: &sqlx::sqlite::SqliteRow) -> NovaResult<RelationRecord> 
 fn ts_to_dt(ts: i64) -> NovaResult<DateTime<Utc>> {
     DateTime::from_timestamp(ts, 0).ok_or_else(|| NovaError::storage_msg(format!("bad ts {ts}")))
 }
-
-// -----------------------------------------------------------------------------
-// Tests
-// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -700,7 +654,7 @@ mod tests {
                 .await
                 .unwrap()
                 .uuid();
-            (cu, a) // unused var placeholder
+            (cu, a) 
         };
         for (src, tgt, pred) in [(a, b, "a→b"), (a, c, "a→c"), (c, b, "c→b")] {
             rr.insert(
@@ -724,7 +678,7 @@ mod tests {
         assert_eq!(incs.len(), 2);
 
         let nodes = rr.bfs_traverse(&db, a, Direction::Out, 3, 100, &[], 0.0).await.unwrap();
-        // a → b, a → c → b, unique entities = {a, b, c}
+
         let ids: HashSet<Uuid> = nodes.iter().map(|n| n.entity.uuid).collect();
         assert_eq!(ids.len(), 3);
     }

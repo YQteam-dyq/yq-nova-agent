@@ -1,12 +1,3 @@
-//! Tag repository.
-//!
-//! Tags are short string labels attached to memory items. The underlying
-//! tables (`tags` / `memory_tags`) are already populated by
-//! `memory::attach_tags` / `memory::detach_tags` during memory CRUD; this
-//! module wraps those low-level helpers in a repository trait so higher
-//! layers never reach into memory.rs internals. It also exposes listing
-//! operations that span memories: "show me all tags used so far", "which
-//! memories carry tag X?", etc.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -19,30 +10,19 @@ use crate::{
     storage::{Database, Repository, memory},
 };
 
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRecord {
     pub id: i64,
     pub name: String,
     pub color: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// Count of memories currently carrying this tag (populated by `list_all`
-    /// and `get_tag`; set to 0 for raw row decodes).
+
     pub memory_count: i64,
 }
 
-// -----------------------------------------------------------------------------
-// Trait
-// -----------------------------------------------------------------------------
-
 #[async_trait]
 pub trait TagRepository: Repository<TagRecord> {
-    /// Add tags to a memory. Creates tag rows lazily if they don't exist yet.
-    /// Duplicate tags on the same memory are silently ignored thanks to the
-    /// `memory_tags` composite PK.
+
     async fn attach_tags(
         &self,
         db: &Database,
@@ -50,7 +30,6 @@ pub trait TagRepository: Repository<TagRecord> {
         tags: &[String],
     ) -> NovaResult<()>;
 
-    /// Remove specific tags from a memory. No-op for tags that are absent.
     async fn detach_tags(
         &self,
         db: &Database,
@@ -58,8 +37,6 @@ pub trait TagRepository: Repository<TagRecord> {
         tags: &[String],
     ) -> NovaResult<()>;
 
-    /// Replace the full tag set of a memory: tags not in `new_tags` are
-    /// detached, tags in `new_tags` are attached. Empty vector clears all.
     async fn replace_tags(
         &self,
         db: &Database,
@@ -67,15 +44,12 @@ pub trait TagRepository: Repository<TagRecord> {
         new_tags: &[String],
     ) -> NovaResult<()>;
 
-    /// List all tags currently attached to `memory_uuid`.
     async fn list_tags_of_memory(
         &self,
         db: &Database,
         memory_uuid: Uuid,
     ) -> NovaResult<Vec<String>>;
 
-    /// List all tags known to the system, each annotated with how many
-    /// memories carry it.
     async fn list_all_tags(
         &self,
         db: &Database,
@@ -83,13 +57,8 @@ pub trait TagRepository: Repository<TagRecord> {
         offset: usize,
     ) -> NovaResult<Vec<TagRecord>>;
 
-    /// Get a single tag by name, or None.
     async fn get_tag_by_name(&self, db: &Database, name: &str) -> NovaResult<Option<TagRecord>>;
 }
-
-// -----------------------------------------------------------------------------
-// Sqlite impl
-// -----------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct SqliteTagRepository;
@@ -139,9 +108,9 @@ impl TagRepository for SqliteTagRepository {
         memory_uuid: Uuid,
         new_tags: &[String],
     ) -> NovaResult<()> {
-        // 1. attach all new tags first (idempotent)
+
         memory::attach_tags(&db.pool, memory_uuid, new_tags).await?;
-        // 2. compute the set to detach: current tags - new_tags
+
         let current = memory::list_tags_of_memory(&db.pool, memory_uuid).await?;
         let new_set: std::collections::HashSet<&str> =
             new_tags.iter().map(|s| s.as_str()).collect();
@@ -208,10 +177,6 @@ impl TagRepository for SqliteTagRepository {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
-
 fn row_to_tag(row: &sqlx::sqlite::SqliteRow) -> NovaResult<TagRecord> {
     let id: i64 = row.try_get("id").map_err(NovaError::storage)?;
     let name: String = row.try_get("name").map_err(NovaError::storage)?;
@@ -227,10 +192,6 @@ fn row_to_tag(row: &sqlx::sqlite::SqliteRow) -> NovaResult<TagRecord> {
         memory_count,
     })
 }
-
-// -----------------------------------------------------------------------------
-// Tests
-// -----------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

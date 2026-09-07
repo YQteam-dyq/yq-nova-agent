@@ -1,8 +1,3 @@
-"""Minimal, zero-dependency HTTP client for the yq-nova Agent memory service.
-
-Uses only the Python standard library (``urllib.request`` / ``json`` /
-``urllib.error``) so it can run anywhere Python 3.8+ is available.
-"""
 
 from __future__ import annotations
 
@@ -12,18 +7,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-
 class NovaApiError(Exception):
-    """Raised when the server returns a non-2xx response.
-
-    Attributes:
-        code: The server-provided error code (e.g. ``"validation"``,
-            ``"not_found"``, ``"conflict"``), or ``"http_{status}"`` when the
-            body could not be parsed as a structured error.
-        message: Human-readable error message from the server.
-        status: The HTTP status code (int).
-        trace_id: Optional trace id returned by the server, if any.
-    """
 
     def __init__(
         self,
@@ -41,17 +25,7 @@ class NovaApiError(Exception):
     def __str__(self) -> str:
         return f"NovaApiError(status={self.status}, code={self.code!r}, message={self.message!r})"
 
-
 class Client:
-    """A thin HTTP client for a running yq-nova server.
-
-    All requests are made against ``base_url`` (trailing ``/`` stripped).
-    If an ``api_key`` is supplied it is sent as a ``Authorization: Bearer``
-    header on every request, matching the server auth layer.
-
-    Every public method returns the parsed JSON body as a Python
-    ``dict`` / ``list``. Non-2xx responses raise :class:`NovaApiError`.
-    """
 
     def __init__(
         self,
@@ -66,9 +40,6 @@ class Client:
         self.api_key = api_key
         self.timeout = timeout
 
-    # ------------------------------------------------------------------ #
-    # low-level request helper
-    # ------------------------------------------------------------------ #
     def _request(
         self,
         method: str,
@@ -76,21 +47,7 @@ class Client:
         body: Any = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Send a JSON request and return the parsed JSON response.
 
-        Args:
-            method: HTTP method (``GET`` / ``POST`` / ``DELETE``).
-            path: Path starting with ``/``, e.g. ``/v1/health``.
-            body: JSON-serializable request body (optional).
-            params: Optional query-string parameters.
-
-        Returns:
-            The parsed JSON response (dict / list / scalar).
-
-        Raises:
-            NovaApiError: If the server returns a non-2xx status.
-            ValueError: If ``body`` is not JSON-serializable.
-        """
         url = self.base_url + path
         if params:
             url += "?" + urllib.parse.urlencode(params)
@@ -134,23 +91,14 @@ class Client:
             return {}
         return json.loads(raw.decode("utf-8"))
 
-    # ------------------------------------------------------------------ #
-    # meta endpoints
-    # ------------------------------------------------------------------ #
     def health(self) -> Dict[str, Any]:
-        """Return the server health info.
 
-        Response: ``{"status": "ok", "version": ..., "git_sha": ..., "uptime_secs": ...}``
-        """
         return self._request("GET", "/v1/health")
 
     def stats(self) -> Dict[str, Any]:
-        """Return coarse runtime counters (db size, memory/graph/tag counts)."""
+
         return self._request("GET", "/v1/stats")
 
-    # ------------------------------------------------------------------ #
-    # memory endpoints
-    # ------------------------------------------------------------------ #
     def remember(
         self,
         content: str,
@@ -162,22 +110,7 @@ class Client:
         embed: bool = True,
         extract_graph: bool = False,
     ) -> Dict[str, Any]:
-        """Store a memory record.
 
-        Args:
-            content: The raw text to remember (required, non-empty).
-            source: Origin of the memory (e.g. ``"agent"``, ``"user"``).
-            importance: 0.0 ~ 1.0 importance score.
-            metadata: Arbitrary structured metadata (or ``None``).
-            expires_at: ISO-8601 UTC expiry string, or ``None`` for never.
-            tags: Optional list of user tags.
-            embed: Whether to embed ``content`` for semantic search.
-            extract_graph: Whether to auto-extract entities/relations.
-
-        Returns:
-            ``{"uuid": ..., "duplicate": bool, "embedding_stored": bool,
-            "entities_extracted": int, "relations_extracted": int, "tags": [...]}``
-        """
         if not content or not content.strip():
             raise ValueError("remember: content must be non-empty")
         body = {
@@ -207,11 +140,7 @@ class Client:
         group_chunks: bool = False,
         entity_focus: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Retrieve memories matching ``query``.
 
-        Returns:
-            ``{"hits": [...], "total_candidates": int, "query": str}``
-        """
         if not query or not query.strip():
             raise ValueError("recall: query must be non-empty")
         if top_k < 1:
@@ -241,7 +170,7 @@ class Client:
         tags: Optional[List[str]] = None,
         expires_at: Optional[Optional[str]] = None,
     ) -> Dict[str, Any]:
-        """Partially update a memory record (PATCH)."""
+
         if not uuid:
             raise ValueError("update_memory: uuid must be non-empty")
         body: Dict[str, Any] = {}
@@ -262,7 +191,7 @@ class Client:
         uuids: List[str],
         keep_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Merge multiple memories into one; archive the rest."""
+
         if not uuids or len(uuids) < 2:
             raise ValueError("merge_memories: uuids must contain at least 2 entries")
         body: Dict[str, Any] = {"uuids": uuids}
@@ -276,7 +205,7 @@ class Client:
         limit: int = 500,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        """Export memories matching an optional filter, paginated."""
+
         body: Dict[str, Any] = {"limit": limit, "offset": offset}
         if filter is not None:
             body["filter"] = filter
@@ -288,7 +217,7 @@ class Client:
         embed: bool = True,
         on_conflict: str = "skip",
     ) -> Dict[str, Any]:
-        """Bulk-import memory items."""
+
         if items is None:
             raise ValueError("import_memories: items must not be None")
         body: Dict[str, Any] = {
@@ -303,7 +232,7 @@ class Client:
         keep_uuid: str,
         discard_uuids: List[str],
     ) -> Dict[str, Any]:
-        """Merge graph entities into ``keep_uuid``, delete the discards."""
+
         if not keep_uuid:
             raise ValueError("merge_entities: keep_uuid must be non-empty")
         if not discard_uuids:
@@ -319,20 +248,7 @@ class Client:
         gc_graph: bool = False,
         batch_limit: int = 500,
     ) -> Dict[str, Any]:
-        """Forget / archive memories.
 
-        Args:
-            uuid: Target a single memory by uuid.
-            filter: Target memories by a filter dict (mutually exclusive with
-                ``uuid``).
-            mode: ``"soft"``, ``"hard"`` or ``"archive"``.
-            gc_graph: Whether to cascade-clean orphan graph nodes.
-            batch_limit: Max number of memories to process in one pass.
-
-        Returns:
-            ``{"affected_memories": int, "cascade_embeddings": int,
-            "gc_entities": int, "gc_relations": int, "mode": str}``
-        """
         if uuid is not None:
             target: Dict[str, Any] = {"type": "one", "value": uuid}
         elif filter is not None:
@@ -348,20 +264,17 @@ class Client:
         return self._request("POST", "/v1/memory/forget", body)
 
     def get_memory(self, uuid: str) -> Dict[str, Any]:
-        """Fetch a single memory record by uuid."""
+
         if not uuid:
             raise ValueError("get_memory: uuid must be non-empty")
         return self._request("GET", f"/v1/memory/{_quote(uuid)}")
 
     def delete_memory(self, uuid: str) -> Dict[str, Any]:
-        """Hard-delete a single memory by uuid."""
+
         if not uuid:
             raise ValueError("delete_memory: uuid must be non-empty")
         return self._request("DELETE", f"/v1/memory/{_quote(uuid)}")
 
-    # ------------------------------------------------------------------ #
-    # graph endpoints
-    # ------------------------------------------------------------------ #
     def upsert_entity(
         self,
         name: str,
@@ -369,11 +282,7 @@ class Client:
         description: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create or update a graph entity keyed by ``(name, entity_type)``.
 
-        Returns:
-            ``{"outcome": {...}, "entity": {...}}``
-        """
         if not name or not name.strip():
             raise ValueError("upsert_entity: name must be non-empty")
         body = {
@@ -392,10 +301,7 @@ class Client:
         predicate_whitelist: Optional[List[str]] = None,
         min_confidence: float = 0.0,
     ) -> List[Dict[str, Any]]:
-        """BFS-traverse the graph from ``start`` and return reachable nodes.
 
-        Returns: A list of traverse node dicts.
-        """
         if not start:
             raise ValueError("traverse: start uuid must be non-empty")
         body = {
@@ -412,16 +318,7 @@ class Client:
         text: str,
         opts: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Extract entities (and optionally link them) from free text.
 
-        Args:
-            text: The raw text to analyze.
-            opts: Optional dict with ``enabled``, ``upsert_entities``,
-                ``create_relations``, ``min_confidence`` keys.
-
-        Returns:
-            The extract-and-link result dict.
-        """
         if not text or not text.strip():
             raise ValueError("extract_and_link: text must be non-empty")
         default_opts = {
@@ -436,17 +333,12 @@ class Client:
         body = {"text": text, "opts": merged}
         return self._request("POST", "/v1/graph/extract-and-link", body)
 
-
 def _quote(value: str) -> str:
-    """Percent-encode a path segment."""
+
     return urllib.parse.quote(value, safe="")
 
-
 def _try_parse_error(raw: bytes):
-    """Best-effort parse of a server error body.
 
-    Returns ``(code, message, trace_id)`` or ``None`` if not parseable.
-    """
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):

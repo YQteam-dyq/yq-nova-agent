@@ -1,8 +1,3 @@
-//! API Token 鉴权中间件。
-//!
-//! 当 `ServerConfig::auth_token` 为空时不做任何鉴权（透传）；
-//! 非空时要求每个请求的 `Authorization` 头为 `Bearer <token>`（或原始 token），
-//! 否则返回 401 JSON 错误体。比较使用常量时间算法以降低时序攻击风险。
 
 use axum::{
     Json,
@@ -15,7 +10,6 @@ use axum::{
 
 use crate::http::{AppState, error::ErrorBody};
 
-/// 常量时间比较两个字节切片是否相等（长度不同直接返回 false）。
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -27,7 +21,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// 鉴权中间件：通过校验放行，否则返回 401。
 pub async fn auth_middleware(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -35,7 +28,6 @@ pub async fn auth_middleware(
 ) -> Response {
     let configured = state.server_cfg.auth_token.clone();
 
-    // 未配置 token：不做鉴权，直接放行。
     if configured.is_empty() {
         return next.run(req).await;
     }
@@ -46,7 +38,6 @@ pub async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .map(ToOwned::to_owned);
 
-    // 提取待比较的 token：优先 `Bearer <token>`，否则把整个值当作 raw token。
     let candidate = provided
         .as_deref()
         .and_then(|v| {
@@ -89,7 +80,6 @@ mod tests {
         storage::{Database, Migrator},
     };
 
-    /// 构造带指定 auth_token 的测试 router。
     async fn make_router(auth_token: &str) -> axum::Router {
         let dir = std::env::temp_dir().join(format!(
             "yq-nova-test-auth-{}-{}",

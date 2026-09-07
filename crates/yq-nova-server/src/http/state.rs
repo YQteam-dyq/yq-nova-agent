@@ -1,6 +1,3 @@
-//! 共享 HTTP 服务状态：配置 + 核心 service 引用。
-//!
-//! 被所有 handler 克隆使用（内部是 Arc 或 Clone，成本很低）。
 
 use std::sync::Arc;
 
@@ -15,7 +12,7 @@ pub struct AppState {
     pub db: Database,
     pub memory: MemoryService,
     pub graph: GraphService,
-    /// build / start time for uptime reporting in /v1/health.
+
     pub started_at_epoch_secs: i64,
 }
 
@@ -31,6 +28,5 @@ impl AppState {
     }
 }
 
-// Silence unused Arc warning (Arc will be used when we add shared registry in M6.x).
 #[allow(dead_code)]
 fn _unused_arc(_: Arc<()>) {}

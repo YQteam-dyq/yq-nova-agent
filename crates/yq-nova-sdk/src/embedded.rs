@@ -1,9 +1,3 @@
-//! Embedded-mode SDK impl.
-//!
-//! Compiles `yq-nova-core` directly into the host process. Zero network
-//! calls, best performance, sharing the same single SQLite database file.
-//! This is the recommended mode for Rust-native callers who want the
-//! lowest latency and no locally-running HTTP server.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -23,39 +17,18 @@ use yq_nova_core::{
 
 use crate::http_client;
 
-/// Embedded-mode yq-nova client.
-///
-/// Owns the concrete [`Database`], [`MemoryService`] and [`GraphService`]
-/// instances so callers can call `remember` / `recall` / `forget` / graph
-/// ops directly in-process, without any HTTP hop. All components are
-/// `Clone` (sharing the same SQLite pool under the hood), so an
-/// `EmbeddedNova` can be cheaply cloned across threads.
-///
-/// # Constructing
-///
-/// - [`EmbeddedNova::open`] — open (or create) a SQLite DB at a path and
-///   wire up a local [`MockEmbeddingProvider`]. Zero network, best for local
-///   use / tests.
-/// - [`EmbeddedNova::from_services`] — for advanced callers who already
-///   built their own providers / services (e.g. a real OpenAI embedder via
-///   `yq_nova_core::embedding::openai_compat`).
 #[derive(Clone)]
 pub struct EmbeddedNova {
-    /// The shared SQLite database handle (pool + config).
+
     pub database: Database,
-    /// Memory service (remember / recall / forget).
+
     pub memory: MemoryService,
-    /// Graph service (extract-and-link / traverse / list entities).
+
     pub graph: GraphService,
 }
 
 impl EmbeddedNova {
-    /// Open (or create) a SQLite database at `db_path` and build a fully
-    /// local, zero-network embedded client.
-    ///
-    /// Uses `Database::open` with default storage tuning, a
-    /// [`MockEmbeddingProvider`] (deterministic pseudo-vectors, no network),
-    /// and `MemoryService::new` / `GraphService::new` (noop extractors).
+
     pub async fn open(db_path: impl Into<PathBuf>) -> NovaResult<Self> {
         let database = Database::open(StorageConfig { db_path: db_path.into(), ..Default::default() })
             .await?;
@@ -65,11 +38,6 @@ impl EmbeddedNova {
         Ok(Self { database, memory, graph })
     }
 
-    /// Construct an embedded client from already-built services.
-    ///
-    /// Advanced callers who need a real embedder / extractor (e.g. an
-    /// OpenAI-compatible provider) should build [`MemoryService`] /
-    /// [`GraphService`] themselves and wire them in here.
     pub fn from_services(
         database: Database,
         memory: MemoryService,
@@ -78,9 +46,6 @@ impl EmbeddedNova {
         Self { database, memory, graph }
     }
 
-    // --- memory -----------------------------------------------------------
-
-    /// Persist a memory (text + importance + tags + optional embedding).
     pub async fn remember(&self, req: http_client::RememberRequest) -> NovaResult<RememberOutput> {
         let input = ops_remember::RememberInput {
             content: &req.content,
@@ -96,7 +61,6 @@ impl EmbeddedNova {
         self.memory.remember(input).await
     }
 
-    /// Retrieve memories matching a natural-language query.
     pub async fn recall(&self, req: http_client::RecallRequest) -> NovaResult<RecallOutput> {
         let input = ops_recall::RecallInput {
             query: &req.query,
@@ -115,17 +79,14 @@ impl EmbeddedNova {
         self.memory.recall(input).await
     }
 
-    /// Forget / archive memories (by UUID or by filter).
     pub async fn forget(&self, input: ForgetInput) -> NovaResult<ForgetOutput> {
         self.memory.forget(input).await
     }
 
-    /// Fetch a single memory record by UUID.
     pub async fn get_memory(&self, uuid: Uuid) -> NovaResult<yq_nova_core::storage::MemoryRecord> {
         self.memory.get_memory(uuid).await
     }
 
-    /// Hard-delete a single memory by UUID (not recoverable).
     pub async fn delete_memory(&self, uuid: Uuid) -> NovaResult<ForgetOutput> {
         self.memory
             .forget(ops_forget::ForgetInput {
@@ -137,7 +98,6 @@ impl EmbeddedNova {
             .await
     }
 
-    /// Partial update of a memory record.
     pub async fn update_memory(
         &self,
         uuid: Uuid,
@@ -153,7 +113,6 @@ impl EmbeddedNova {
         self.memory.update(uuid, input).await
     }
 
-    /// Merge multiple memories into one; the rest are archived.
     pub async fn merge_memories(
         &self,
         req: http_client::MergeMemoriesRequest,
@@ -170,7 +129,6 @@ impl EmbeddedNova {
         })
     }
 
-    /// Export memories matching an optional filter, with pagination.
     pub async fn export_memories(
         &self,
         req: http_client::ExportMemoriesRequest,
@@ -184,7 +142,6 @@ impl EmbeddedNova {
         })
     }
 
-    /// Import memory items in bulk.
     pub async fn import_memories(
         &self,
         req: http_client::ImportMemoriesRequest,
@@ -217,9 +174,6 @@ impl EmbeddedNova {
         })
     }
 
-    // --- graph ------------------------------------------------------------
-
-    /// Create or update a knowledge-graph entity keyed on `(name, type)`.
     pub async fn upsert_entity(
         &self,
         req: http_client::UpsertEntityRequest,
@@ -242,7 +196,6 @@ impl EmbeddedNova {
         Ok(http_client::UpsertEntityResponse { outcome, entity })
     }
 
-    /// BFS-traverse the graph from a start entity.
     pub async fn traverse(
         &self,
         req: http_client::TraverseRequest,
@@ -256,8 +209,6 @@ impl EmbeddedNova {
         self.graph.traverse_graph(req.start, opts).await
     }
 
-    /// Extract entities/relations from free text and (optionally) write
-    /// them into the graph.
     pub async fn extract_and_link(
         &self,
         req: http_client::ExtractAndLinkRequest,
@@ -265,8 +216,6 @@ impl EmbeddedNova {
         self.graph.extract_and_link(&req.text, &req.opts).await
     }
 
-    /// Merge graph entities: move all relations from discard_uuids to
-    /// keep_uuid, then delete the discarded entities.
     pub async fn merge_entities(
         &self,
         req: http_client::MergeEntitiesRequest,
@@ -283,9 +232,6 @@ impl EmbeddedNova {
         })
     }
 
-    // --- meta -------------------------------------------------------------
-
-    /// Synthetic health check for the embedded client.
     pub async fn health(&self) -> NovaResult<http_client::HealthResponse> {
         Ok(http_client::HealthResponse {
             status: "ok".into(),
@@ -295,7 +241,6 @@ impl EmbeddedNova {
         })
     }
 
-    /// Compute coarse-grained statistics from the database directly.
     pub async fn stats(&self) -> NovaResult<http_client::StatsResponse> {
         Ok(http_client::StatsResponse {
             uptime_secs: 0,

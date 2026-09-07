@@ -1,8 +1,6 @@
-//! Background job runner (TTL expire job + forgetting job). M7 implements.
 
 use serde::{Deserialize, Serialize};
 
-/// Outcome of a single job execution, logged for observability.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRun {
     pub job: &'static str,
@@ -11,7 +9,6 @@ pub struct JobRun {
     pub started_at_unix_ms: i64,
 }
 
-/// Action taken by the `forgetting` job when records match the stale criteria.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgettingAction {
@@ -35,6 +32,3 @@ impl TryFrom<&str> for ForgettingAction {
         })
     }
 }
-
-// M7 adds: BackgroundRunner struct with spawn/shutdown, TTL expire job,
-// forgetting job, SIGHUP/TERM graceful integration.

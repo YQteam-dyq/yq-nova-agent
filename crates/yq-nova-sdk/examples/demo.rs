@@ -1,10 +1,3 @@
-//! End-to-end yq-nova demo using `yq-nova-sdk`'s HTTP client.
-//!
-//! Run in two terminals:
-//!   Terminal 1: YQ_NOVA_EMBEDDING__DEFAULT_PROVIDER=mock cargo run -p yq-nova -- serve
-//!   Terminal 2: cargo run -p yq-nova-sdk-demo
-//!
-//! By default it connects to http://127.0.0.1:7999; set YQ_NOVA_URL to override.
 
 use std::time::Duration;
 
@@ -34,7 +27,6 @@ async fn main() -> NovaResult<()> {
     let client = HttpClient::with_timeout(base_url, Duration::from_secs(5))?;
     println!("==> connecting to {}", client.base_url());
 
-    // 0. health / stats
     let health = client.health().await?;
     println!(
         "[health]  status={} version={} git_sha={} uptime={}s",
@@ -50,7 +42,6 @@ async fn main() -> NovaResult<()> {
         db = stats.database_size_bytes,
     );
 
-    // 1. remember some facts about a project
     println!("\n==> remember 3 facts");
     let facts = [
         (
@@ -92,7 +83,6 @@ async fn main() -> NovaResult<()> {
         uuids.push(out.uuid);
     }
 
-    // 2. recall with a fuzzy query
     println!("\n==> recall 'SQLite memory graph api'");
     let recall = client
         .recall_builder()
@@ -119,7 +109,6 @@ async fn main() -> NovaResult<()> {
         );
     }
 
-    // 3. graph: upsert 2 entities + link + BFS traverse
     println!("\n==> graph: Alice --reports_to--> Bob");
     let alice = client
         .upsert_entity(UpsertEntityRequest {
@@ -172,7 +161,6 @@ async fn main() -> NovaResult<()> {
         );
     }
 
-    // 4. extract_and_link on ad-hoc text (doesn't go into memory)
     println!("\n==> extract_and_link on text");
     let opts = GraphExtractOpts {
         enabled: true,
@@ -199,7 +187,6 @@ async fn main() -> NovaResult<()> {
         println!("    * {name} (type={t})", name = cand.name, t = cand.entity_type,);
     }
 
-    // 5. forget via filter: tag='api' → Hard delete
     println!("\n==> forget(tag=api, mode=Hard)");
     let f = MemoryFilter { tags_all: Some(vec!["api".to_string()]), ..Default::default() };
     let forgotten = client
@@ -216,13 +203,11 @@ async fn main() -> NovaResult<()> {
         casc = forgotten.cascade_embeddings
     );
 
-    // 5b. DELETE the UUID corresponding to the graph-fact memory directly.
     if let Some(uuid) = uuids.get(1).copied() {
         let del = client.delete_memory(uuid).await?;
         println!("  direct DELETE uuid={uuid}: affected={}", del.affected_memories);
     }
 
-    // 6. final stats
     let stats = client.stats().await?;
     println!(
         "\n==> final stats active={active} archived={archived} entities={ent} relations={rel}",
