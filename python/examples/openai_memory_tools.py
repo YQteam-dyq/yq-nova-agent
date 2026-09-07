@@ -1,7 +1,4 @@
-"""
-Example: Using yq-nova with OpenAI function-calling style.
-Requires a running yq-nova server.
-"""
+
 import json
 from yq_nova import Client
 

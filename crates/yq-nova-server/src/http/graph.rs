@@ -1,8 +1,3 @@
-//! HTTP handlers for `/v1/graph` routes.
-//!
-//! M4.3: entities (POST upsert / GET list)
-//!       relations (POST upsert / GET list)
-//!       traverse (POST — BFS from entity)
 
 use axum::{
     Json,
@@ -23,10 +18,6 @@ use yq_nova_core::{
 };
 
 use crate::http::{AppError, AppState, Result};
-
-// ---------------------------------------------------------------------------
-// Request / response types.
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpsertEntityRequest {
@@ -136,10 +127,6 @@ pub struct ExtractLinkRequest {
     pub opts: GraphExtractOpts,
 }
 
-// ---------------------------------------------------------------------------
-// Handlers.
-// ---------------------------------------------------------------------------
-
 pub async fn upsert_entity(
     State(state): State<AppState>,
     Json(req): Json<UpsertEntityRequest>,
@@ -164,7 +151,7 @@ pub async fn list_entities(
     let repo = SqliteEntityRepository::new();
     let db = &state.db;
     let limit = q.limit.min(500);
-    // 简单 offset 分页：list 本身没 offset，这里我们 limit+offset 就用 offset 跳过。
+
     let rows = repo
         .list(
             db,
@@ -200,7 +187,6 @@ pub async fn upsert_relation(
     let outcome = repo.insert(db, input).await?;
     let relation_uuid = outcome.uuid();
 
-    // Fetch the relation: try listing outgoing with predicate filter.
     let list = repo.list_outgoing(db, req.source_uuid, Some(predicate.as_str()), 50).await?;
     let relation = list
         .into_iter()
@@ -238,7 +224,7 @@ pub async fn list_relations(
         let got = repo.list_incoming(db, tgt, q.predicate.as_deref(), total_limit).await?;
         rows = got;
     } else {
-        // 无 source/target，列出前 N 个已知实体的 outgoing，避免全表扫描需要 FromRow。
+
         let ent_repo = SqliteEntityRepository::new();
         let ents = ent_repo.list(db, None, None, 50, 0).await?;
         for e in ents {

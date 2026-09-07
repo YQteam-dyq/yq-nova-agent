@@ -1,46 +1,34 @@
-//! Unified error type for yq-nova-core.
-//!
-//! All fallible public APIs return [`NovaResult<T>`], which is a thin
-//! alias for `Result<T, NovaError>`. [`NovaError`] is intentionally
-//! cheap-to-clone and structured so that HTTP endpoints can easily
-//! map each variant to an HTTP status code + error code.
 
 use std::fmt;
 
 use serde::Serialize;
 
-/// Short-hand result alias used across the whole crate.
 pub type NovaResult<T> = Result<T, NovaError>;
 
-/// Stable machine-readable error codes.
-///
-/// HTTP handlers map these to status codes, so new variants should
-/// be added sparingly and with a clear mapping in mind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum ErrorCode {
-    /// Input failed validation (HTTP 400).
+
     Validation = 100,
-    /// Requested record does not exist (HTTP 404).
+
     NotFound = 101,
-    /// Conflict, e.g. duplicate on an unique field when the caller
-    /// did not ask for upsert (HTTP 409).
+
     Conflict = 102,
-    /// Missing or invalid credentials, permission denied (HTTP 403).
+
     Forbidden = 103,
-    /// Storage/SQLite error (HTTP 500).
+
     Storage = 200,
-    /// Error from embedding provider (HTTP 502/500 depending on cause).
+
     Embedding = 201,
-    /// Graph traversal error.
+
     Graph = 202,
-    /// Bad configuration (at startup; HTTP 500 if caught at runtime).
+
     Config = 203,
-    /// Anything else / internal invariant violation (HTTP 500).
+
     Internal = 204,
 }
 
 impl ErrorCode {
-    /// Stable machine-readable string, e.g. "validation" / "not_found".
+
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::Validation => "validation",
@@ -56,25 +44,17 @@ impl ErrorCode {
     }
 }
 
-/// The main error type.
-///
-/// The source error is stored as an `anyhow::Error` so we retain a
-/// full chain of context, but [`ErrorCode`] and the top-level message
-/// are enough for stable matching.
 #[derive(Debug, thiserror::Error)]
 pub struct NovaError {
     code: ErrorCode,
     message: String,
     #[source]
     source: Option<anyhow::Error>,
-    /// Populated by the HTTP layer; not serialised to clients.
+
     trace_id: Option<String>,
 }
 
 impl NovaError {
-    // ----------------------------------------------------------------
-    // Constructors — one per ErrorCode.
-    // ----------------------------------------------------------------
 
     pub fn validation<M: Into<String>>(msg: M) -> Self {
         Self::new(ErrorCode::Validation, msg.into(), None)
@@ -142,10 +122,6 @@ impl NovaError {
         Self::new(ErrorCode::Internal, msg.into(), Some(src.into()))
     }
 
-    // ----------------------------------------------------------------
-    // Helpers.
-    // ----------------------------------------------------------------
-
     pub fn new(code: ErrorCode, message: String, source: Option<anyhow::Error>) -> Self {
         Self { code, message, source, trace_id: None }
     }
@@ -170,7 +146,6 @@ impl NovaError {
         self
     }
 
-    /// Suggested HTTP status code for this error.
     pub fn http_status(&self) -> u16 {
         match self.code {
             ErrorCode::Validation | ErrorCode::Conflict => 400,
@@ -191,12 +166,6 @@ impl fmt::Display for NovaError {
         Ok(())
     }
 }
-
-// --------------------------------------------------------------------
-// Convenience From impls for common error types. These map to the
-// closest semantic variant; callers that need precise mapping should
-// use the explicit constructors above.
-// --------------------------------------------------------------------
 
 impl From<sqlx::Error> for NovaError {
     fn from(value: sqlx::Error) -> Self {

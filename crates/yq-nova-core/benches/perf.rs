@@ -1,12 +1,3 @@
-//! Task 5: performance benchmarks (criterion).
-//!
-//! Three groups:
-//!   a. `vector_knn`   — KNN linear-scan scaling vs #vectors (SqliteVectorStore)
-//!   b. `graph_bfs`    — GraphService BFS traversal latency vs #nodes
-//!   c. `embedding`    — MockEmbeddingProvider::embed_batch throughput
-//!
-//! criterion is synchronous, so each benchmark closure drives the async
-//! calls through a single current-thread tokio runtime via `block_on`.
 
 use std::sync::Arc;
 
@@ -25,13 +16,10 @@ use yq_nova_core::storage::{
 };
 use yq_nova_core::Uuid;
 
-/// A single current-thread runtime reused across all async calls in a bench.
 fn runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread().enable_all().build().expect("build tokio runtime")
 }
 
-/// Open a fresh temp-file SQLite DB (applies migrations), mirroring the
-/// `temp_db()` pattern used in the storage tests.
 async fn temp_db(tag: &str) -> Database {
     let dir = std::env::temp_dir().join(format!("yq-nova-bench-{tag}-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -44,10 +32,6 @@ async fn temp_db(tag: &str) -> Database {
     Database::open(cfg).await.expect("open temp db")
 }
 
-// -----------------------------------------------------------------------------
-// a. Vector KNN scaling
-// -----------------------------------------------------------------------------
-
 fn bench_vector_knn(c: &mut Criterion) {
     const DIMS: usize = 64;
     const K: usize = 10;
@@ -55,8 +39,7 @@ fn bench_vector_knn(c: &mut Criterion) {
     let mut group = c.benchmark_group("vector_knn_linear_scan");
 
     for n in [1_000usize, 10_000, 100_000] {
-        // Build + populate the store once per scale so setup cost is excluded
-        // from the timed measurement.
+
         let store = rt.block_on(async {
             let db = temp_db("knn").await;
             let mem_repo = SqliteMemoryRepository::new();
@@ -94,17 +77,12 @@ fn bench_vector_knn(c: &mut Criterion) {
     group.finish();
 }
 
-// -----------------------------------------------------------------------------
-// b. Graph BFS traversal
-// -----------------------------------------------------------------------------
-
 fn bench_graph_bfs(c: &mut Criterion) {
     let rt = runtime();
     let mut group = c.benchmark_group("graph_bfs_traverse");
 
     for n in [100usize, 300, 1000] {
-        // Build a graph where each node connects to the next few nodes, so a
-        // BFS rooted at node 0 fans out broadly. Setup is done once per scale.
+
         let (svc, start) = rt.block_on(async {
             let db = temp_db("bfs").await;
             let svc = GraphService::new(db);
@@ -167,17 +145,13 @@ fn bench_graph_bfs(c: &mut Criterion) {
     group.finish();
 }
 
-// -----------------------------------------------------------------------------
-// c. Embedding throughput (mock provider)
-// -----------------------------------------------------------------------------
-
 fn bench_embedding(c: &mut Criterion) {
     let rt = runtime();
     let provider = Arc::new(MockEmbeddingProvider::new(64));
     let mut group = c.benchmark_group("embedding_batch_throughput");
 
     for n in [100usize, 1000] {
-        // Build the text corpus once per scale.
+
         let texts: Vec<String> = (0..n)
             .map(|i| {
                 format!(

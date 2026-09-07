@@ -1,15 +1,3 @@
-//! HTTP 层统一错误格式。
-//!
-//! 所有 API 错误都会序列化为 JSON：
-//! ```json
-//! {"code": "validation", "message": "...", "trace_id": "abc123"}
-//! ```
-//!
-//! 非 2xx 状态码由 NovaError 的 error_code 映射而来。
-//!
-//! 注意：`NovaError` 定义在 yq-nova-core 里，`IntoResponse` 定义在 axum 里。
-//! 按 Rust 孤儿规则，server crate 不能直接为外部类型 impl 外部 trait。
-//! 我们用一个轻量 newtype `AppError`（包装 `NovaError`）来实现转换。
 
 use axum::{
     Json,
@@ -66,7 +54,6 @@ impl IntoResponse for AppError {
     }
 }
 
-/// 404 / 405 fallback: never return HTML (P6-4 统一 JSON 错误格式)。
 pub async fn fallback_404() -> impl IntoResponse {
     let body = ErrorBody {
         code: ErrorCode::NotFound.as_str(),

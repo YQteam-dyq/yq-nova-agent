@@ -1,19 +1,3 @@
-//! `recall` — given a natural-language query, retrieve semantically +
-//! graph-relevant memories, rank them, return a sorted list of hits.
-//!
-//! Pipeline (MVP semantic-only mode, fully local):
-//!
-//! 1. Validate inputs (query non-empty, top_k sane, threshold bounded).
-//! 2. Embed the query using the service's default provider.
-//! 3. KNN against the vector store for initial candidates (`vector_candidates`).
-//! 4. (Optional, if graph traversal is enabled) BFS outward from entities
-//!    attached to the top K hits; pull in memories attached to those
-//!    entities as `graph_candidates`.
-//! 5. Dedupe the union by `memory_uuid`.
-//! 6. Pass all candidates through `rank::rank` with weighted components;
-//!    apply the final score threshold; sort desc.
-//! 7. Mark every returned hit as `accessed` (access_count + 1, last_accessed).
-//! 8. Return the top `top_k`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,47 +20,31 @@ use crate::{
     },
 };
 
-/// Input to [`MemoryService::recall`].
 #[derive(Debug, Clone)]
 pub struct RecallInput<'a> {
-    /// Natural-language query. For `semantic` mode this gets embedded and used
-    /// for KNN; for `keyword` (v0.2) this becomes a SQLite LIKE query.
+
     pub query: &'a str,
-    /// Max number of results to return. Hard-capped at 200 to avoid blowing
-    /// up the caller's RAM on accidentally-wide queries.
+
     pub top_k: usize,
-    /// Minimum *final* weighted score. Applied after the ranker, so it
-    /// applies to semantic-similarity + importance + access combined.
+
     pub score_threshold: f32,
-    /// Minimum *raw cosine similarity* for a direct vector hit to count.
-    /// Kept independent so callers can enforce a "the embedding must at
-    /// least match this well" floor without also penalising graph-adjacent
-    /// memories (which have no raw cosine).
+
     pub similarity_threshold: f32,
-    /// Retrieval mode. MVP only implements `Semantic`; the others fall back
-    /// to semantic with a debug-level log.
+
     pub mode: SearchMode,
-    /// Graph-traversal options. `enabled = false` (default) means no BFS
-    /// expansion.
+
     pub graph: GraphTraversalOpts,
-    /// Per-source weights for hybrid-mode RRF fusion (keyword/semantic/graph).
-    /// `None` uses `HybridWeights::default()`.
+
     pub hybrid_weights: Option<HybridWeights>,
-    /// Optional smoothing constant `k` for RRF. Default = 25 (see
-    /// `rank::reciprocal_rank_fusion`).
+
     pub rrf_k: Option<u32>,
-    /// Optional per-call rank weight overrides; `None` uses `RankWeights::default()`.
+
     pub rank_weights: Option<RankWeights>,
-    /// Optional filter applied on all retrieved MemoryRecords before ranking.
-    /// Use to restrict recall to a subset of sources / tags / time windows.
+
     pub filter: MemoryFilter,
-    /// When true, candidates with the same `chunk_group` metadata are collapsed
-    /// so only the highest-scoring chunk per group survives. Default: false.
+
     pub group_chunks: bool,
-    /// Entity names to anchor recall on. When non-empty, entities matching
-    /// these names (case-insensitive) are found, BFS-traversed (depth ≤ 2),
-    /// and their associated memories are added to the candidate set with
-    /// graph_boost weighting. Unknown names are silently ignored.
+
     pub entity_focus: Vec<String>,
 }
 
@@ -99,8 +67,6 @@ impl<'a> Default for RecallInput<'a> {
     }
 }
 
-/// A single recall hit. The caller gets a full `MemoryRecord` + the scoring
-/// breakdown so they can build explainability UI or debug poor ranking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallHit {
     pub memory: MemoryRecord,
@@ -113,15 +79,14 @@ pub struct RecallHit {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RecallOutput {
     pub hits: Vec<RecallHit>,
-    /// Total candidate count considered before top_k cutoff (useful for
-    /// pagination / "hits shown X of Y" UI).
+
     pub total_candidates: usize,
-    /// Query string echoed back (useful for async pipelines that lose context).
+
     pub query: String,
 }
 
 pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<RecallOutput> {
-    // --- 1. Validation -------------------------------------------------------
+
     let query = input.query.trim();
     if query.is_empty() {
         return Err(NovaError::validation("recall: query must not be empty"));
@@ -143,19 +108,12 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         return Err(NovaError::validation("recall: score_threshold must be finite"));
     }
 
-    // Candidate fetch size for each source. Fetch more than we need so RRF
-    // + the linear ranker have enough material to work with.
     let fetch_k = (top_k * 4).min(200).max(top_k.max(10));
     let hybrid_weights = input.hybrid_weights.unwrap_or_default();
 
-    // Determine which statuses are acceptable (for both FTS5 and vector
-    // post-filtering). If filter.status_in is set, use it; otherwise default
-    // to [Active] so archived/expired rows never come back unless explicitly
-    // requested.
     let statuses: Vec<MemoryStatus> =
         input.filter.status_in.clone().unwrap_or_else(|| vec![MemoryStatus::Active]);
 
-    // --- 2. Semantic source (if the mode wants it) --------------------------
     let mut semantic_hits: Vec<(Uuid, f32)> = Vec::new();
     if matches!(input.mode, SearchMode::Semantic | SearchMode::Hybrid) {
         let q_vec = svc.embedding.embed_one(query).await?;
@@ -172,19 +130,13 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         semantic_hits = vhits.into_iter().map(|h| (h.memory_uuid, h.similarity)).collect();
     }
 
-    // --- 3. Keyword source (if the mode wants it) ---------------------------
     let mut keyword_hits: Vec<(Uuid, f32)> = Vec::new();
     if matches!(input.mode, SearchMode::Keyword | SearchMode::Hybrid) {
         let khits = svc.fts5_store.keyword_search(&svc.database, query, fetch_k, &statuses).await?;
-        // `score` is already normalised to [0, 1] with 1.0 = best. For
-        // downstream ranker compatibility we map to a pseudo raw_similarity
-        // value in [-1, 1] via `keyword_score * 2 - 1`.
+
         keyword_hits = khits.into_iter().map(|h| (h.uuid, h.score * 2.0 - 1.0)).collect();
     }
 
-    // --- 4. Graph expansion (if enabled) ------------------------------------
-    // Graph candidates are seeded from the entities that are already attached
-    // to semantic + keyword hits via relation.memory_uuid, then BFS expanded.
     let mut graph_memories: Vec<Uuid> = Vec::new();
     if input.graph.enabled {
         let mut seed_uuids: Vec<Uuid> = semantic_hits
@@ -201,7 +153,6 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         }
     }
 
-    // --- 4b. Entity focus (if entity_focus is non-empty) --------------------
     if !input.entity_focus.is_empty() {
         let mut focus_entity_uuids: BTreeSet<Uuid> = BTreeSet::new();
         for name in &input.entity_focus {
@@ -255,7 +206,6 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         }
     }
 
-    // --- 5. Per-mode: collect ordered uuid list + build "best sim" map ------
     struct CollectedCandidates {
         ordered: Vec<Uuid>,
         sim_by_uuid: BTreeMap<Uuid, f32>,
@@ -266,8 +216,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         SearchMode::Semantic => {
             let sim_by_uuid: BTreeMap<Uuid, f32> = semantic_hits.iter().copied().collect();
             let mut ordered: Vec<Uuid> = semantic_hits.iter().map(|(u, _)| *u).collect();
-            // Flag ALL graph-expanded memories, even those that already appeared
-            // in semantic hits, so the caller can see "graph also agrees".
+
             let mut from_graph: BTreeSet<Uuid> = BTreeSet::new();
             for u in &graph_memories {
                 from_graph.insert(*u);
@@ -326,10 +275,9 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
                 });
             }
 
-            // Sim maps: preserve best available per source.
             let mut sim_by_uuid: BTreeMap<Uuid, f32> = semantic_hits.into_iter().collect();
             let keyword_scores: BTreeMap<Uuid, f32> = keyword_hits.iter().copied().collect();
-            // Keyword also contributes to "best sim" if semantic didn't have it.
+
             for (u, s) in &keyword_hits {
                 sim_by_uuid.entry(*u).or_insert_with(|| *s);
             }
@@ -339,16 +287,15 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
             }
 
             let rrf = reciprocal_rank_fusion(sources, input.rrf_k);
-            // Take top (top_k * 3) from RRF as candidates to rank linearly.
+
             let rrf_limit = (top_k * 3).min(400);
             let ordered: Vec<Uuid> = rrf.into_iter().take(rrf_limit).map(|h| h.uuid).collect();
             CollectedCandidates { ordered, sim_by_uuid, from_graph, keyword_scores }
         },
     };
 
-    let _ = collected.keyword_scores; // field reserved for future explainability
+    let _ = collected.keyword_scores; 
 
-    // --- 6. Load MemoryRecords + apply post-filter -------------------------
     let mut records: Vec<MemoryRecord> = Vec::with_capacity(collected.ordered.len());
     for uuid in &collected.ordered {
         match svc.memory_repo.get_by_uuid(&svc.database, *uuid).await {
@@ -362,7 +309,6 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         records.into_iter().filter(|r| passes_filter(r, &filter)).collect();
     let total_candidates = filtered.len();
 
-    // --- 7. Linear ranker ---------------------------------------------------
     let weights = input.rank_weights.unwrap_or_default();
     let threshold = input.score_threshold;
     let candidates: Vec<RankCandidate<'_>> = filtered
@@ -375,8 +321,6 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         .collect();
     let ranked = rank(candidates, weights, threshold);
 
-    // --- 8. Optional: collapse chunk groups so only the highest-scoring -----
-    // ---     chunk per chunk_group survives.                              ---
     let collapsed: Vec<super::rank::RankedHit<'_>> = if input.group_chunks {
         let mut best_per_group: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
@@ -405,7 +349,6 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         ranked
     };
 
-    // --- 9. Mark accessed for returned hits only ---------------------------
     let mut hits: Vec<RecallHit> = Vec::with_capacity(collapsed.len().min(top_k));
     for rh in collapsed.into_iter().take(top_k) {
         let _ = svc.memory_repo.mark_accessed(&svc.database, rh.memory.uuid).await;
@@ -421,17 +364,13 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
     Ok(RecallOutput { hits, total_candidates, query: query.to_string() })
 }
 
-// ---------------------------------------------------------------------------
-// Graph expansion helper — seed memories → related memories via entities.
-// ---------------------------------------------------------------------------
 async fn expand_graph_memories(
     svc: &MemoryService,
     seed_memory_uuids: &[Uuid],
     opts: &GraphTraversalOpts,
     limit: usize,
 ) -> NovaResult<(Vec<Uuid>, BTreeSet<Uuid>)> {
-    // Step 1: entities attached directly to seed memories via relations that
-    // have `memory_uuid` set.
+
     if seed_memory_uuids.is_empty() {
         return Ok((Vec::new(), BTreeSet::new()));
     }
@@ -463,7 +402,6 @@ async fn expand_graph_memories(
         }
     }
 
-    // Step 2: BFS each start entity up to `max_depth`, accumulating entities.
     let max_depth = opts.max_depth.min(6);
     let mut visited_entities: BTreeSet<Uuid> = start_entities.clone();
     for ent in &start_entities {
@@ -479,11 +417,6 @@ async fn expand_graph_memories(
         }
     }
 
-    // Step 3: find memories that reference any visited entity (via any
-    // relation row that has memory_uuid != NULL). We keep seed memories in the
-    // output so the caller can mark them as "graph also confirmed" via the
-    // from_graph flag; downstream callers de-dup them when merging ordered
-    // lists.
     let entity_strs2: Vec<String> = visited_entities.iter().map(|u| u.to_string()).collect();
     if entity_strs2.is_empty() {
         return Ok((Vec::new(), start_entities));
@@ -516,10 +449,6 @@ async fn expand_graph_memories(
     out.truncate(limit);
     Ok((out, start_entities))
 }
-
-// ---------------------------------------------------------------------------
-// filter helper
-// ---------------------------------------------------------------------------
 
 pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
     if let Some(ref statuses) = f.status_in {
@@ -558,7 +487,7 @@ pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
         }
     }
     if let Some(la_before) = f.last_accessed_before {
-        // Use created_at as a proxy when NULL (same as the SQL side).
+
         let effective = r.last_accessed.unwrap_or(r.created_at);
         if effective >= la_before {
             return false;
@@ -639,7 +568,6 @@ mod tests {
     async fn recall_returns_both_memories_and_marks_accessed() {
         let svc = temp_svc().await;
 
-        // Insert two memories with clearly distinct content (hashes differ).
         let a = svc
             .remember(RememberInput {
                 content: "aaaaaaaaaaaaaa one",
@@ -660,7 +588,6 @@ mod tests {
             .unwrap();
         assert_ne!(a.uuid, b.uuid, "different content → different uuids");
 
-        // Recall with very permissive thresholds to pull in everything.
         let out = svc
             .recall(RecallInput {
                 query: "anything really",
@@ -677,13 +604,12 @@ mod tests {
             2,
             "both memories should be returned (mock dims=8 with very low thresholds)"
         );
-        // Both returned uuids should be the ones we inserted.
+
         let returned: std::collections::HashSet<Uuid> =
             out.hits.iter().map(|h| h.memory.uuid).collect();
         assert!(returned.contains(&a.uuid));
         assert!(returned.contains(&b.uuid));
 
-        // Every returned hit (within top_k) gets its access_count bumped once.
         let a_after = svc.get_memory(a.uuid).await.unwrap();
         let b_after = svc.get_memory(b.uuid).await.unwrap();
         assert_eq!(a_after.access_count, 1, "memory A access_count should be 1 (within top_k)");
@@ -703,7 +629,7 @@ mod tests {
             .unwrap();
         let _y = svc
             .remember(RememberInput {
-                content: "alpha alpha alpha", // same content hash? no, trim—yes same.
+                content: "alpha alpha alpha", 
                 tags: &["y".into()],
                 importance: 0.99,
                 ..Default::default()
@@ -711,9 +637,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Second call was content-duplicate. So both x.uuid and y.uuid are the same.
-        // Tags are merged from x+y remember calls. We can still test tags_any filter that requires tag.
-        // Use a *different* content so we actually get a different uuid:
         let zz = svc
             .remember(RememberInput {
                 content: "beta beta beta beta",
@@ -764,10 +687,10 @@ mod tests {
         let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
         assert!(ids.contains(&hi.uuid), "high imp should pass filter");
         assert!(!ids.contains(&low.uuid), "low imp must be filtered out");
-        // Check low has access_count == 0 still since it wasn't returned.
+
         let low_mem = svc.get_memory(low.uuid).await.unwrap();
         assert_eq!(low_mem.access_count, 0);
-        let _ = (low,); // silence unused for non-test
+        let _ = (low,); 
     }
 
     #[tokio::test]
@@ -982,10 +905,6 @@ mod tests {
             tags: Vec::new(),
         }
     }
-
-    // -----------------------------------------------------------------------
-    // entity_focus tests
-    // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn entity_focus_empty_does_not_change_behavior() {

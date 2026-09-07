@@ -1,6 +1,3 @@
-//! HTTP handlers for the `/v1/memory` routes.
-//!
-//! M4.2: POST remember / POST recall / POST forget / GET :uuid / DELETE :uuid
 
 use axum::{
     Json,
@@ -25,11 +22,6 @@ use yq_nova_core::{
 
 use crate::http::{AppError, AppState, Result};
 
-// ---------------------------------------------------------------------------
-// Request DTOs (owned variants — HTTP bodies cannot have borrows).
-// ---------------------------------------------------------------------------
-
-/// Body for `POST /v1/memory/remember`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RememberRequest {
@@ -60,7 +52,6 @@ impl Default for RememberRequest {
     }
 }
 
-/// Body for `POST /v1/memory/recall`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RecallRequest {
@@ -97,10 +88,6 @@ impl Default for RecallRequest {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Handlers.
-// ---------------------------------------------------------------------------
 
 pub async fn remember(
     State(state): State<AppState>,
@@ -172,7 +159,7 @@ pub async fn delete_memory(
     let svc: &MemoryService = &state.memory;
     let input = ForgetInput {
         target: ForgetTarget::One(uuid),
-        mode: ForgetMode::Hard, // DELETE /memory/:uuid => hard delete (no trace)
+        mode: ForgetMode::Hard, 
         gc_graph: false,
         batch_limit: 1,
     };
@@ -255,10 +242,6 @@ pub async fn import_memories(
     let out = svc.import(req).await?;
     Ok(Json(out))
 }
-
-// ---------------------------------------------------------------------------
-// Tests (P8 集成测试 — 用 axum 的 tower ServiceExt::oneshot 直接测试路由).
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -366,7 +349,6 @@ mod tests {
     async fn recall_without_graph_returns_memory_ranked_by_importance() {
         let (_state, router) = make_router().await;
 
-        // 先插入两条，importance 不一样
         for (content, imp) in [("common task", 0.1), ("important user profile", 0.95)] {
             let body = serde_json::json!({
                 "content": content,
@@ -401,7 +383,7 @@ mod tests {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let out: RecallOutput = serde_json::from_slice(&bytes).expect("recall output");
         assert!(!out.hits.is_empty(), "expect at least one recall hit");
-        // 第一个应该是 imp=0.95 的那条
+
         let first_mem = &out.hits[0].memory;
         assert!(first_mem.importance > 0.8, "higher importance should rank first");
     }
@@ -410,7 +392,6 @@ mod tests {
     async fn get_memory_by_uuid_returns_record() {
         let (_state, router) = make_router().await;
 
-        // insert
         let body = serde_json::json!({
             "content": "get-by-uuid content",
             "importance": 0.3,
@@ -481,7 +462,6 @@ mod tests {
             serde_json::from_slice(&bytes).unwrap();
         assert_eq!(forget_out.affected_memories, 1);
 
-        // GET now returns 404 (status = not_found)
         let req = Request::builder()
             .uri(format!("/v1/memory/{}", out.uuid))
             .method("GET")
@@ -503,10 +483,6 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["code"], "not_found");
     }
-
-    // =========================================================================
-    // M9: Keyword / Hybrid / Graph expansion recall.
-    // =========================================================================
 
     async fn remember(router: &axum::Router, content: &str, tags: &[&str]) -> RememberOutput {
         let body = serde_json::json!({
@@ -565,13 +541,11 @@ mod tests {
     #[tokio::test]
     async fn hybrid_mode_merges_keyword_and_semantic_sets() {
         let (_state, router) = make_router().await;
-        // Only keyword matches "xyzzy_phrase":
+
         let k = remember(&router, "xyzzy_phrase unique token", &["k"]).await;
-        // Only semantic matches (mock embedding returns small random distances
-        // so "anything" often returns everything within fetch_k):
+
         let s = remember(&router, "different topic not containing magic word", &["s"]).await;
 
-        // Keyword-only mode: only k.
         let kw = recall_req(
             &router,
             serde_json::json!({"query":"xyzzy_phrase","top_k":10,"mode":"keyword"}),
@@ -582,7 +556,6 @@ mod tests {
         assert!(kw_uuids.contains(&k.uuid));
         assert!(!kw_uuids.contains(&s.uuid));
 
-        // Hybrid with generous thresholds → union.
         let out = recall_req(
             &router,
             serde_json::json!({
@@ -597,10 +570,9 @@ mod tests {
         .await;
         let hy_uuids: std::collections::HashSet<_> =
             out.hits.iter().map(|h| h.memory.uuid).collect();
-        // Keyword must always be there (hard FTS match).
+
         assert!(hy_uuids.contains(&k.uuid), "hybrid must include keyword hit");
-        // And hybrid total_candidates should be >= the keyword-only total on
-        // the same query because semantic adds candidates.
+
         assert!(
             out.total_candidates >= kw.total_candidates,
             "hybrid >= keyword candidates (got {} vs {})",
@@ -614,7 +586,6 @@ mod tests {
     async fn graph_expansion_pulls_in_related_memory_via_entity_edge() {
         let (state, router) = make_router().await;
 
-        // 1. Upsert two entities.
         async fn upsert_ent(router: &axum::Router, name: &str, ty: &str) -> UpsertEntityResponse {
             let body = serde_json::json!({"name": name, "type": ty});
             let req = Request::builder()
@@ -630,15 +601,9 @@ mod tests {
         let alice = upsert_ent(&router, "Alice", "person").await.entity.uuid;
         let bob = upsert_ent(&router, "Bob", "person").await.entity.uuid;
 
-        // 2. Remember memory #1 about Alice; remember memory #2 about Bob (no
-        // shared keywords).
         let m1 = remember(&router, "alice_foo works on rust code", &["alice"]).await;
         let m2 = remember(&router, "bob_bar likes hiking on weekends", &["bob"]).await;
 
-        // 3. Create TWO relations so m1 references Alice (seed) and m2
-        // references Bob (target-for-expansion). Each row's memory_uuid is
-        // what the graph expansion step scans to find "memories related to
-        // entity X".
         for (src, tgt, mem, pred) in
             [(alice, bob, m1.uuid, "reports_to"), (alice, bob, m2.uuid, "shares_project_with")]
         {
@@ -661,10 +626,6 @@ mod tests {
         }
         let _ = state;
 
-        // 4. Recall with mode=semantic + graph.enabled = true, querying
-        // something that only matches m1's keywords.  Graph expansion follows
-        // the Alice--Bob edge and returns memories that reference Bob (m2) as
-        // `from_graph=true`.
         let out = recall_req(
             &router,
             serde_json::json!({
@@ -680,7 +641,7 @@ mod tests {
         .await;
         let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
         assert!(ids.contains(&m1.uuid), "seed memory m1 must be present");
-        // m2 should be pulled in via graph expansion.
+
         assert!(
             ids.contains(&m2.uuid),
             "m2 should be pulled in via graph expansion. Recall ids: {ids:?}. total_candidates={}",

@@ -1,19 +1,3 @@
-//! OpenAI-compatible `/v1/embeddings` HTTP embedding provider.
-//!
-//! Works with any upstream that speaks the same contract:
-//!   - OpenAI official (`https://api.openai.com/v1`)
-//!   - Azure OpenAI (pass a custom base_url that includes the deployment path)
-//!   - Local Ollama `/v1` proxy
-//!   - vLLM / LM Studio / text-embeddings-inference (when running in
-//!     OpenAI-compat mode)
-//!
-//! The provider:
-//!   * Splits `embed_batch` inputs into sub-batches of at most `batch_size`
-//!     (OpenAI has a hard 2048-inputs-per-request cap; many self-hosted
-//!     proxies are lower).
-//!   * Retries transient failures (429 / 5xx) via [`super::retry`].
-//!   * Validates returned vector dims match [`EmbeddingMeta::dims`] so a
-//!     misconfigured provider can't silently poison the vector store.
 
 use std::time::Duration;
 
@@ -27,31 +11,24 @@ use super::{
 };
 use crate::error::NovaResult;
 
-/// Config for [`OpenAiCompatProvider`]. Kept `Serialize/Deserialize` so
-/// callers can round-trip it through `Config` TOML files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiCompatConfig {
-    /// Base URL without the trailing `/embeddings`. Defaults to the public
-    /// OpenAI endpoint; point at `http://localhost:11434/v1` for Ollama, etc.
+
     pub base_url: String,
-    /// `Authorization: Bearer <api_key>`. May be empty for local proxies that
-    /// don't require auth.
+
     #[serde(default)]
     pub api_key: String,
-    /// Model name, e.g. `text-embedding-3-small`. Passed verbatim to the
-    /// upstream in the request body.
+
     pub model: String,
-    /// Expected output dimensionality. Used both for the EmbeddingMeta tag
-    /// stored alongside vectors AND for response validation.
+
     pub dims: usize,
-    /// Max number of `input` entries per HTTP call. Upstreams vary wildly;
-    /// OpenAI caps at 2048 but self-hosted proxies often default to 32-256.
+
     pub batch_size: usize,
-    /// Per-request timeout (applied inside every retry attempt).
+
     #[serde(with = "crate::config::duration_seconds")]
     pub request_timeout: Duration,
-    /// Retry policy (429/5xx) before propagating an error.
+
     #[serde(flatten)]
     pub retry: RetryConfig,
 }
@@ -69,8 +46,6 @@ impl Default for OpenAiCompatConfig {
         }
     }
 }
-
-// ---- request / response DTOs ------------------------------------------------
 
 #[derive(Debug, Serialize)]
 struct EmbeddingReqBody<'a> {
@@ -91,17 +66,6 @@ struct EmbeddingResp {
     data: Vec<EmbeddingRespDataItem>,
 }
 
-// ---- provider impl ---------------------------------------------------------
-
-/// OpenAI 兼容 `/v1/embeddings` HTTP Embedding 提供者。
-///
-/// 支持任意兼容该接口的上游：OpenAI 官方、Azure OpenAI、Ollama（/v1 代理）、
-/// vLLM、LM Studio、text-embeddings-inference 等。
-///
-/// 核心特性：
-/// - 将 `embed_batch` 按 `batch_size` 拆分子批次
-/// - 对 429/5xx 等临时性错误通过 `retry` 模块重试
-/// - 校验返回向量维度与配置一致，避免毒化向量库
 pub struct OpenAiCompatProvider {
     client: reqwest::Client,
     meta: EmbeddingMeta,
@@ -121,14 +85,7 @@ impl std::fmt::Debug for OpenAiCompatProvider {
 }
 
 impl OpenAiCompatProvider {
-    /// 使用指定配置构造 OpenAI 兼容 Embedding 提供者。
-    ///
-    /// 核心入口：调用方通常先从配置层拿到 `OpenAiCompatConfig`，再调用本函数
-    /// 构造实例，最后 `Arc::new(provider)` 作为 `SharedEmbeddingProvider` 注入
-    /// 到 `MemoryService` / `EmbeddingRegistry`。
-    ///
-    /// 校验项：`model` 非空、`dims > 0`、`batch_size > 0`；
-    /// 同时会构建带超时与 User-Agent 的 reqwest 客户端。
+
     pub fn new(config: OpenAiCompatConfig) -> NovaResult<Self> {
         if config.model.trim().is_empty() {
             return Err(crate::error::NovaError::validation(
@@ -161,8 +118,6 @@ impl OpenAiCompatProvider {
         Ok(Self { client, meta, config, endpoint })
     }
 
-    /// Run a single sub-batch. Used by the batching loop in `embed_batch`.
-    /// Public (crate) only for tests.
     async fn run_once(&self, texts: &[&str]) -> NovaResult<Vec<Vec<f32>>> {
         let body =
             EmbeddingReqBody { model: &self.config.model, input: texts, encoding_format: "float" };
@@ -235,14 +190,10 @@ impl EmbeddingProvider for OpenAiCompatProvider {
         if texts.len() <= self.config.batch_size {
             return self.run_once(texts).await;
         }
-        // Split into chunks and run sequentially (keeps impl simple, avoids
-        // overwhelming small upstreams). Callers that need parallelism can
-        // pre-split; the retry layer still works per-chunk.
+
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(self.config.batch_size) {
-            // Lifetime dance: `run_once` wants &[&str] but chunk is &&[&str].
-            // Collect into a tiny vec of refs — negligible allocation because
-            // each chunk is at most batch_size (~128).
+
             let refs: Vec<&str> = chunk.to_vec();
             let sub = self.run_once(&refs).await?;
             out.extend(sub);
@@ -299,8 +250,4 @@ mod tests {
         assert_eq!(p.meta().provider, "openai_compat");
     }
 
-    // NOTE: full end-to-end tests against a real / mocked server are not in
-    // unit tests because they require either network access or a helper
-    // like `mockito`. Integration tests in the `tests/` directory (M5)
-    // validate the happy path using axum::test server.
 }

@@ -1,8 +1,3 @@
-//! Crate-level integration tests for the embedded-mode SDK (`EmbeddedNova`).
-//!
-//! These exercise the full remember → recall → forget pipeline and the graph
-//! extract-and-link path against a real (temp) SQLite database, with no
-//! network involved.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -18,7 +13,6 @@ use yq_nova_core::{
 };
 use yq_nova_sdk::{EmbeddedNova, http_client};
 
-/// Make a unique temp DB path under `std::env::temp_dir()`.
 fn tmp_db(tag: &str) -> PathBuf {
     use std::time::{SystemTime, UNIX_EPOCH};
     let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
@@ -31,7 +25,6 @@ fn tmp_db(tag: &str) -> PathBuf {
 async fn remember_recall_forget_flow() {
     let nova = EmbeddedNova::open(tmp_db("rr")).await.expect("open embedded nova");
 
-    // --- remember ---
     let out = nova
         .remember(http_client::RememberRequest {
             content: "Rust memory: impl Deref for MyBox via Box-like layout".into(),
@@ -43,11 +36,9 @@ async fn remember_recall_forget_flow() {
         .expect("remember");
     assert!(!out.uuid.is_nil(), "new memory must get a non-nil uuid");
 
-    // --- get_memory ---
     let rec = nova.get_memory(out.uuid).await.expect("get_memory");
     assert_eq!(rec.content, "Rust memory: impl Deref for MyBox via Box-like layout");
 
-    // --- recall (semantic mode, mock embedder) ---
     let recall = nova
         .recall(http_client::RecallRequest {
             query: "rust deref".into(),
@@ -61,7 +52,6 @@ async fn remember_recall_forget_flow() {
         "recall should return the remembered uuid"
     );
 
-    // --- delete (hard) then verify gone ---
     nova.delete_memory(out.uuid).await.expect("delete_memory");
     let err = nova.get_memory(out.uuid).await.expect_err("get after delete should fail");
     assert_eq!(err.code(), ErrorCode::NotFound);
@@ -93,9 +83,7 @@ async fn stats_reflect_counts() {
 
 #[tokio::test]
 async fn graph_extract_and_link_works() {
-    // `EmbeddedNova::open` wires a NoopExtractor, so for a real extraction to
-    // happen we build a graph service with the RegexWikiExtractor and hand it
-    // in via `from_services`.
+
     let db_path = tmp_db("graph");
     let db = Database::open(StorageConfig { db_path, ..Default::default() })
         .await
@@ -123,5 +111,5 @@ async fn health_returns_ok() {
     let h = nova.health().await.expect("health");
     assert_eq!(h.status, "ok");
     assert_eq!(h.version, yq_nova_core::VERSION);
-    let _ = Uuid::new_v4(); // exercise the re-exported Uuid import
+    let _ = Uuid::new_v4(); 
 }

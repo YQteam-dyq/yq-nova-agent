@@ -1,13 +1,3 @@
-//! yq-nova — lightweight Agent memory & state layer (binary entrypoint).
-//!
-//! Minimum behaviour implemented at M4:
-//!   1. Parse `Config` from env / toml
-//!   2. Initialise tracing
-//!   3. Open / migrate the SQLite database
-//!   4. Start axum HTTP server on `server.bind`
-//!   5. Graceful shutdown on SIGINT/SIGTERM
-//!
-//! TODO list for later milestones lives in ../../tasks.md
 
 use std::{net::SocketAddr, process::ExitCode, sync::Arc, time::Duration};
 
@@ -40,7 +30,7 @@ use crate::http::{AppState, build_router};
     long_about = None,
 )]
 struct Cli {
-    /// Path to a TOML config file (overrides YQ_NOVA_CONFIG env var).
+
     #[arg(short, long, env = "YQ_NOVA_CONFIG")]
     config: Option<std::path::PathBuf>,
 
@@ -50,49 +40,48 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run the HTTP server (default if no subcommand is given).
+
     Serve,
-    /// Validate the current config and SQLite file, then exit.
+
     Check,
-    /// Dump the merged, validated config as TOML to stdout. Useful for
-    /// debugging env-var / toml layering.
+
     ConfigShow,
-    /// Initialise the DB (create + migrate) then exit. Good for CI/CD.
+
     InitDb,
-    /// Remember a single piece of content directly (no HTTP).
+
     Remember(RememberArgs),
-    /// Run a recall query and print hits (no HTTP).
+
     Recall(RecallArgs),
-    /// Forget memories by UUID or filter (no HTTP).
+
     Forget(ForgetArgs),
-    /// Print DB stats (active/archived counts, entities, relations, DB size).
+
     Stats,
 }
 
 #[derive(Debug, Args)]
 struct RememberArgs {
-    /// Memory content (required). Pass as positional arg or via --content.
+
     #[arg(required_unless_present = "content")]
     content_pos: Option<String>,
-    /// Alternatively, pass content via this flag.
+
     #[arg(long)]
     content: Option<String>,
-    /// Importance in `[0, 1]`. Default 0.5.
+
     #[arg(long, value_parser = clap_num())]
     importance: Option<f32>,
-    /// Memory source label.
+
     #[arg(long, default_value_t = MemorySourceCli::User)]
     source: MemorySourceCli,
-    /// Attach a tag (repeatable).
+
     #[arg(long = "tag")]
     tags: Vec<String>,
-    /// Compute + store the semantic embedding.
+
     #[arg(long, default_value_t = true)]
     embed: bool,
-    /// Run WikiLink/#tag graph extraction and attach entities/relations.
+
     #[arg(long, default_value_t = false)]
     extract_graph: bool,
-    /// Output as JSON instead of a human-friendly one-liner.
+
     #[arg(long)]
     json: bool,
 }
@@ -152,49 +141,49 @@ impl From<SearchModeCli> for SearchMode {
 
 #[derive(Debug, Args)]
 struct RecallArgs {
-    /// Query string.
+
     query: String,
-    /// Number of hits to return.
+
     #[arg(long, default_value_t = 10)]
     top_k: usize,
-    /// Retrieval mode.
+
     #[arg(long, value_enum, default_value_t = SearchModeCli::Semantic)]
     mode: SearchModeCli,
-    /// Minimum final-score threshold in `[0,1]`.
+
     #[arg(long, default_value_t = 0.0)]
     score_threshold: f32,
-    /// Enable graph expansion for this recall.
+
     #[arg(long, default_value_t = false)]
     graph: bool,
-    /// Max BFS depth when --graph is on.
+
     #[arg(long, default_value_t = 2)]
     graph_depth: u8,
-    /// Print each hit as JSON lines instead of a human table.
+
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct ForgetArgs {
-    /// Forget one specific UUID.
+
     #[arg(long)]
     uuid: Option<String>,
-    /// Forget by tag name (repeatable; ALL tags must match).
+
     #[arg(long = "tag-all")]
     tag_all: Vec<String>,
-    /// Maximum importance a row can have to be eligible for forgetting.
+
     #[arg(long)]
     importance_max: Option<f32>,
-    /// `soft` (archive) or `hard` (delete).
+
     #[arg(long, value_enum, default_value_t = ForgetModeCli::Soft)]
     mode: ForgetModeCli,
-    /// Also cascade-orphan dangling graph entities (UUID path only).
+
     #[arg(long, default_value_t = false)]
     gc_graph: bool,
-    /// Safety cap on rows affected by a filter-based forget.
+
     #[arg(long, default_value_t = 1000)]
     batch_limit: usize,
-    /// Print a summary JSON blob.
+
     #[arg(long)]
     json: bool,
 }
@@ -221,7 +210,6 @@ impl From<ForgetModeCli> for ForgetMode {
     }
 }
 
-// Helper so `#[arg(value_parser = clap_num())]` works for `f32` in 0..=1.
 fn clap_num() -> impl clap::builder::TypedValueParser<Value = f32> {
     clap::builder::StringValueParser::new().try_map(|s: String| {
         let n: f32 = s.parse::<f32>().map_err(|e| format!("expected float: {e}"))?;
@@ -237,15 +225,13 @@ async fn main() -> ExitCode {
     let exit_code = match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            // If tracing isn't initialised yet we still want a readable error.
+
             eprintln!("fatal: {e:#}");
             error!(error = %e, "yq-nova exited with error");
             ExitCode::FAILURE
         },
     };
 
-    // Flush + shutdown the OpenTelemetry exporter before the process exits
-    // so no spans are lost (no-op when OTel is disabled / not compiled in).
     #[cfg(feature = "otel")]
     yq_nova_core::logging::shutdown_otel();
 
@@ -253,13 +239,12 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> NovaResult<()> {
-    // ------- CLI parse + optional override of config path -------
+
     let cli = Cli::parse();
     if let Some(path) = &cli.config {
         std::env::set_var("YQ_NOVA_CONFIG", path);
     }
 
-    // ------- Load & validate config, init logging -------
     let cfg = Config::load()?;
     let _ = logging::init_tracing(&cfg.logging);
 
@@ -274,8 +259,7 @@ async fn run() -> NovaResult<()> {
     let cmd = cli.command.unwrap_or(Commands::Serve);
     match cmd {
         Commands::ConfigShow => {
-            // Use the core save_to helper to avoid a direct toml dep
-            // mismatch (core already handles serialisation errors).
+
             let mut buf = Vec::new();
             cfg.save_to_temp(&mut buf)?;
             let s = String::from_utf8(buf)
@@ -482,7 +466,6 @@ async fn run() -> NovaResult<()> {
             let db = Database::open(cfg.storage.clone()).await?;
             info!(size_bytes = db.size_on_disk_bytes()?, "database ready");
 
-            // --- M5.1/5.2: 按配置选择 embedding provider ---
             let (provider_name, provider, embed_dims, _registry) =
                 provider_wiring::build_registry(&cfg.embedding)?;
             info!(
@@ -501,17 +484,11 @@ async fn run() -> NovaResult<()> {
             let memory = MemoryService::new(db.clone(), provider.clone());
             let graph = GraphService::with_parts(db.clone(), Arc::new(RegexWikiExtractor::new()));
 
-            // --- M6.3: Spawn background jobs (TTL + GC) with graceful shutdown ---
             let cancel = background::new_cancel_token();
             let job_cancel = cancel.clone();
             let memory_for_jobs = memory.clone();
             let forgetting_cfg = cfg.forgetting.clone();
-            // TTL job runs at a fixed short cadence; GC cadence is driven by
-            // forgetting_cfg.check_interval (slower). Combine them by letting
-            // the faster ticker wake up; GC simply early-returns on the ticks
-            // that are off-phase. We use the ttl_interval for now (it's the
-            // fast one). Later can split into two independent handles if we
-            // want precise per-job intervals.
+
             let _forgetting_owned = forgetting_cfg.clone();
             let jobs_handle = background::spawn_job_loop(
                 memory_for_jobs,
@@ -535,8 +512,7 @@ async fn run() -> NovaResult<()> {
                 .await
                 .map_err(|e| yq_nova_core::NovaError::internal_with_ctx("bind tcp", e))?;
 
-            // TCP keepalive for the server sockets.
-            let _ = Duration::from_secs(60); // keep reference for future fine-tuning.
+            let _ = Duration::from_secs(60); 
             axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     let _ = wait_for_shutdown_signal().await;
@@ -546,9 +522,6 @@ async fn run() -> NovaResult<()> {
                 .await
                 .map_err(|e| yq_nova_core::NovaError::internal_with_ctx("axum serve", e))?;
 
-            // Await the jobs handle after HTTP exits so all bookkeeping logs
-            // (including final stats) flush before we exit. Put a 30s ceiling
-            // so an accidentally-stuck in-flight job doesn't prevent shutdown.
             let _stats = match tokio::time::timeout(Duration::from_secs(30), jobs_handle).await {
                 Ok(Ok(s)) => s,
                 Ok(Err(e)) => {
@@ -567,19 +540,12 @@ async fn run() -> NovaResult<()> {
                 "server stopped cleanly"
             );
 
-            // Flush WAL + close SQLite pool before returning so the on-disk
-            // state is fully consistent (checkpoint truncate + pool drop is
-            // required to avoid leaving -wal/-shm behind after clean exit).
             info!("flushing SQLite WAL and closing pool");
             db.close().await?;
             Ok(())
         },
     }
 }
-
-// ---------------------------------------------------------------------------
-// Shared helper for CLI-only subcommands: open DB + wire providers.
-// ---------------------------------------------------------------------------
 
 async fn open_core_services(
     cfg: &Config,

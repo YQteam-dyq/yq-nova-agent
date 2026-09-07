@@ -1,9 +1,3 @@
-//! 元信息 endpoints：health / stats。
-//!
-//! P6-1: `/v1/health` 快速探活（返回 ok + uptime）。
-//! P6-2: `/v1/stats` 返回库大小、记忆数量、实体数量、tag 统计等。
-//!
-//! 两个 handler 都禁止 panic，错误统一转为 500 JSON（通过 AppError/NovaError）。
 
 use axum::{Json, extract::State};
 use chrono::Utc;
@@ -14,10 +8,6 @@ use yq_nova_core::storage::{
 };
 
 use crate::http::{AppError, AppState, Result};
-
-// ---------------------------------------------------------------------------
-// /v1/health
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct HealthOut {
@@ -37,10 +27,6 @@ pub async fn health(State(state): State<AppState>) -> Result<Json<HealthOut>> {
     }))
 }
 
-// ---------------------------------------------------------------------------
-// /v1/stats
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize, Default)]
 pub struct StatsOut {
     pub uptime_secs: i64,
@@ -54,7 +40,7 @@ pub struct StatsOut {
 }
 
 async fn db_size_bytes(db: &yq_nova_core::storage::Database) -> Option<i64> {
-    // 对于 SQLite，我们直接从 DB 句柄做一个简单查询，获取 page_size * page_count。
+
     let sql_page_size: std::result::Result<i64, sqlx::Error> =
         sqlx::query_scalar::<_, i64>("PRAGMA page_size").fetch_one(&db.pool).await;
     let sql_page_count: std::result::Result<i64, sqlx::Error> =
@@ -71,7 +57,6 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<StatsOut>> {
     let tag_repo = SqliteTagRepository::new();
     let entity_repo = SqliteEntityRepository::new();
 
-    // 计数：status=Active
     let active_count = mem_repo
         .count(
             db,
@@ -86,7 +71,6 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<StatsOut>> {
         )
         .await?;
 
-    // 直接查 entities / relations 计数，避免复杂 join，保持快：
     let entity_count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
         .fetch_one(&db.pool)
         .await
@@ -102,9 +86,8 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<StatsOut>> {
         .await
         .map_err(|e| AppError::from(yq_nova_core::error::NovaError::storage(e)))?;
 
-    let _ = (tag_repo, entity_repo); // suppress unused warnings; repos used later in M4.3
+    let _ = (tag_repo, entity_repo); 
 
-    // total: 所有非 deleted（等价于默认 filter）
     let total_count = mem_repo.count(db, &MemoryFilter::default()).await?;
 
     let database_size_bytes = db_size_bytes(db).await;

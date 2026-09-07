@@ -1,4 +1,3 @@
-"""yq-nova: minimal Python client for the yq-nova Agent memory service."""
 
 from .client import Client, NovaApiError
 
