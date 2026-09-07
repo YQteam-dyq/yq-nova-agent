@@ -11,10 +11,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yq_nova_core::{
     memory::{
-        MemoryService,
+        ChunkOptions, MemoryService,
+        ops_export::ExportInput,
         ops_forget::ForgetInput,
+        ops_import::ImportInput,
+        ops_merge::{MergeInput, MergeOutput},
         ops_recall::{RecallInput, RecallOutput},
         ops_remember::{RememberInput, RememberOutput},
+        ops_update::UpdateInput,
     },
     storage::{MemoryFilter, MemorySource},
 };
@@ -37,6 +41,7 @@ pub struct RememberRequest {
     pub tags: Vec<String>,
     pub embed: bool,
     pub extract_graph: bool,
+    pub chunk_options: Option<ChunkOptions>,
 }
 
 impl Default for RememberRequest {
@@ -49,7 +54,8 @@ impl Default for RememberRequest {
             expires_at: None,
             tags: vec![],
             embed: true,
-            extract_graph: false, // MVP 默认不抽取图，避免误报
+            extract_graph: false,
+            chunk_options: None,
         }
     }
 }
@@ -68,6 +74,9 @@ pub struct RecallRequest {
     pub rrf_k: Option<u32>,
     pub rank_weights: Option<yq_nova_core::memory::rank::RankWeights>,
     pub filter: MemoryFilter,
+    pub group_chunks: bool,
+    #[serde(default)]
+    pub entity_focus: Vec<String>,
 }
 
 impl Default for RecallRequest {
@@ -83,6 +92,8 @@ impl Default for RecallRequest {
             rrf_k: None,
             rank_weights: None,
             filter: MemoryFilter::default(),
+            group_chunks: false,
+            entity_focus: Vec::new(),
         }
     }
 }
@@ -105,6 +116,7 @@ pub async fn remember(
         tags: &req.tags,
         embed: req.embed,
         extract_graph: req.extract_graph,
+        chunk_options: req.chunk_options,
     };
     let out = svc.remember(input).await?;
     Ok(Json(out))
@@ -126,6 +138,8 @@ pub async fn recall(
         rrf_k: req.rrf_k,
         rank_weights: req.rank_weights,
         filter: req.filter.clone(),
+        group_chunks: req.group_chunks,
+        entity_focus: req.entity_focus,
     };
     let out: RecallOutput = svc.recall(input).await?;
     Ok(Json(out))
@@ -163,6 +177,82 @@ pub async fn delete_memory(
         batch_limit: 1,
     };
     let out = svc.forget(input).await?;
+    Ok(Json(out))
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UpdateMemoryRequest {
+    pub content: Option<String>,
+    pub importance: Option<f32>,
+    pub metadata: Option<serde_json::Value>,
+    pub tags: Option<Vec<String>>,
+    pub expires_at: Option<Option<chrono::DateTime<Utc>>>,
+}
+
+impl Default for UpdateMemoryRequest {
+    fn default() -> Self {
+        Self {
+            content: None,
+            importance: None,
+            metadata: None,
+            tags: None,
+            expires_at: None,
+        }
+    }
+}
+
+pub async fn update_memory(
+    State(state): State<AppState>,
+    Path(uuid): Path<Uuid>,
+    Json(req): Json<UpdateMemoryRequest>,
+) -> Result<Json<yq_nova_core::storage::MemoryRecord>> {
+    let svc: &MemoryService = &state.memory;
+    let input = UpdateInput {
+        content: req.content,
+        importance: req.importance,
+        metadata: req.metadata,
+        tags: req.tags,
+        expires_at: req.expires_at,
+    };
+    let mem = svc.update(uuid, input).await.map_err(AppError::from)?;
+    Ok(Json(mem))
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MergeRequest {
+    pub uuids: Vec<Uuid>,
+    pub keep_uuid: Option<Uuid>,
+}
+
+pub async fn merge_memories(
+    State(state): State<AppState>,
+    Json(req): Json<MergeRequest>,
+) -> Result<Json<MergeOutput>> {
+    let svc: &MemoryService = &state.memory;
+    let input = MergeInput {
+        uuids: req.uuids,
+        keep_uuid: req.keep_uuid,
+    };
+    let out = svc.merge(input).await?;
+    Ok(Json(out))
+}
+
+pub async fn export_memories(
+    State(state): State<AppState>,
+    Json(req): Json<ExportInput>,
+) -> Result<Json<yq_nova_core::memory::ops_export::ExportOutput>> {
+    let svc: &MemoryService = &state.memory;
+    let out = svc.export(req).await?;
+    Ok(Json(out))
+}
+
+pub async fn import_memories(
+    State(state): State<AppState>,
+    Json(req): Json<ImportInput>,
+) -> Result<Json<yq_nova_core::memory::ops_import::ImportOutput>> {
+    let svc: &MemoryService = &state.memory;
+    let out = svc.import(req).await?;
     Ok(Json(out))
 }
 

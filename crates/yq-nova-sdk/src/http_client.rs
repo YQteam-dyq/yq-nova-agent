@@ -22,8 +22,8 @@ use yq_nova_core::{
     error::{ErrorCode, NovaError, NovaResult},
     graph::{GraphExtractOpts, LinkResult},
     memory::{
-        ForgetInput, ForgetOutput, GraphTraversalOpts, HybridWeights, RankWeights, RecallOutput,
-        RememberOutput, SearchMode,
+        ChunkOptions, ForgetInput, ForgetOutput, GraphTraversalOpts, HybridWeights, RankWeights,
+        RecallOutput, RememberOutput, SearchMode,
     },
     storage::{
         EntityRecord, MemoryFilter, MemoryRecord, MemorySource, RelationRecord, TraverseNode,
@@ -53,6 +53,8 @@ pub struct RememberRequest {
     pub embed: bool,
     /// 是否从 content 中自动抽取实体与关系并写入知识图谱。
     pub extract_graph: bool,
+    /// 长文本自动分块选项。启用后 content 会被切分为多个记忆条目。
+    pub chunk_options: Option<ChunkOptions>,
 }
 
 impl Default for RememberRequest {
@@ -66,6 +68,7 @@ impl Default for RememberRequest {
             tags: vec![],
             embed: true,
             extract_graph: false,
+            chunk_options: None,
         }
     }
 }
@@ -94,6 +97,12 @@ pub struct RecallRequest {
     pub rank_weights: Option<RankWeights>,
     /// 记忆过滤条件（按状态、标签、重要性范围等过滤候选集）。
     pub filter: MemoryFilter,
+    /// 若为 true，同一 chunk_group 的分块中仅保留得分最高的那条进入排序。
+    pub group_chunks: bool,
+    /// 实体锚定检索：按名称（大小写不敏感）查找实体，BFS 扩展后关联的记忆
+    /// 加入候选集并参与 graph_boost 加权。未知名称静默忽略。
+    #[serde(default)]
+    pub entity_focus: Vec<String>,
 }
 
 // ---------- Graph DTOs (mirrors yq-nova-server/http/graph.rs) --------------
@@ -223,6 +232,115 @@ pub struct ExtractAndLinkRequest {
     pub text: String,
     /// 抽取选项：是否启用、是否 upsert 实体、是否创建关系、最小置信度。
     pub opts: GraphExtractOpts,
+}
+
+// ---------- Memory mutation DTOs --------------------------------------------
+
+/// PATCH /v1/memory/{uuid} 的请求体。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct UpdateMemoryRequest {
+    pub content: Option<String>,
+    pub importance: Option<f32>,
+    pub metadata: Option<serde_json::Value>,
+    pub tags: Option<Vec<String>>,
+    pub expires_at: Option<Option<DateTime<Utc>>>,
+}
+
+/// POST /v1/memory/merge 的请求体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeMemoriesRequest {
+    pub uuids: Vec<Uuid>,
+    pub keep_uuid: Option<Uuid>,
+}
+
+/// POST /v1/memory/merge 的响应体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeMemoriesResponse {
+    pub kept_uuid: Uuid,
+    pub merged: Vec<Uuid>,
+    pub remapped_relations: usize,
+}
+
+/// POST /v1/memory/export 的请求体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportMemoriesRequest {
+    pub filter: Option<MemoryFilter>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+impl Default for ExportMemoriesRequest {
+    fn default() -> Self {
+        Self { filter: None, limit: 500, offset: 0 }
+    }
+}
+
+/// POST /v1/memory/export 的响应体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportMemoriesResponse {
+    pub count: usize,
+    pub offset: u32,
+    pub items: Vec<MemoryRecord>,
+}
+
+/// 导入记忆的单个条目。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImportItem {
+    pub content: String,
+    pub uuid: Option<Uuid>,
+    pub metadata: Option<serde_json::Value>,
+    pub importance: Option<f32>,
+    pub source: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// POST /v1/memory/import 的请求体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportMemoriesRequest {
+    pub items: Vec<ImportItem>,
+    pub embed: bool,
+    pub on_conflict: String,
+}
+
+impl Default for ImportMemoriesRequest {
+    fn default() -> Self {
+        Self { items: vec![], embed: true, on_conflict: "skip".into() }
+    }
+}
+
+/// 导入过程中的单条错误。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportError {
+    pub index: usize,
+    pub message: String,
+}
+
+/// POST /v1/memory/import 的响应体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportMemoriesResponse {
+    pub received: usize,
+    pub imported: usize,
+    pub duplicates: usize,
+    pub errors: Vec<ImportError>,
+}
+
+/// POST /v1/graph/entities/merge 的请求体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeEntitiesRequest {
+    pub keep_uuid: Uuid,
+    pub discard_uuids: Vec<Uuid>,
+}
+
+/// POST /v1/graph/entities/merge 的响应体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeEntitiesResponse {
+    pub kept_uuid: Uuid,
+    pub merged: Vec<Uuid>,
+    pub remapped_relations: usize,
 }
 
 // ---------- Meta DTOs -------------------------------------------------------
@@ -390,6 +508,22 @@ impl HttpClient {
         self.map_response(resp, &url).await
     }
 
+    async fn patch_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> NovaResult<T> {
+        let url = self.url(path);
+        let resp = self
+            .client
+            .patch(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| NovaError::internal_with_ctx(format!("PATCH {url}"), e))?;
+        self.map_response(resp, &url).await
+    }
+
     async fn map_response<T: DeserializeOwned>(&self, resp: Response, url: &str) -> NovaResult<T> {
         let status = resp.status();
         if status.is_success() {
@@ -516,6 +650,50 @@ impl HttpClient {
     /// 返回 `ForgetOutput` 以描述实际受影响的行数。
     pub async fn delete_memory(&self, uuid: Uuid) -> NovaResult<ForgetOutput> {
         self.delete_json(&format!("/v1/memory/{uuid}")).await
+    }
+
+    /// 局部更新一条记忆（PATCH 语义）。仅非 None 的字段会被写入。
+    ///
+    /// content 变更时自动重新计算哈希并更新 Embedding。
+    pub async fn update_memory(
+        &self,
+        uuid: Uuid,
+        req: UpdateMemoryRequest,
+    ) -> NovaResult<MemoryRecord> {
+        self.patch_json(&format!("/v1/memory/{uuid}"), &req).await
+    }
+
+    /// 合并多条记忆为一条，其余归档。被归档条目的 relations 中 `memory_uuid`
+    /// 会被重指向到保留条目。
+    pub async fn merge_memories(
+        &self,
+        req: MergeMemoriesRequest,
+    ) -> NovaResult<MergeMemoriesResponse> {
+        self.post_json("/v1/memory/merge", &req).await
+    }
+
+    /// 按过滤条件导出记忆条目（分页）。
+    pub async fn export_memories(
+        &self,
+        req: ExportMemoriesRequest,
+    ) -> NovaResult<ExportMemoriesResponse> {
+        self.post_json("/v1/memory/export", &req).await
+    }
+
+    /// 批量导入记忆条目（支持内容哈希去重即 ContentHash 和 UUID 冲突跳过）。
+    pub async fn import_memories(
+        &self,
+        req: ImportMemoriesRequest,
+    ) -> NovaResult<ImportMemoriesResponse> {
+        self.post_json("/v1/memory/import", &req).await
+    }
+
+    /// 合并图谱实体：将 discard_uuids 中的实体合并到 keep_uuid 实体。
+    pub async fn merge_entities(
+        &self,
+        req: MergeEntitiesRequest,
+    ) -> NovaResult<MergeEntitiesResponse> {
+        self.post_json("/v1/graph/entities/merge", &req).await
     }
 
     // --- builders ------------------------------------------------------------
@@ -809,6 +987,11 @@ impl<'a> RememberReqBuilder<'a> {
         self.req.extract_graph = v;
         self
     }
+    /// 设置长文本自动分块选项。
+    pub fn chunk_options(mut self, opts: ChunkOptions) -> Self {
+        self.req.chunk_options = Some(opts);
+        self
+    }
     /// 发送 remember 请求。
     ///
     /// - 若 `content` 为空，直接返回客户端侧
@@ -900,6 +1083,24 @@ impl<'a> RecallReqBuilder<'a> {
     /// 设置记忆过滤条件（按状态、标签、重要性范围、时间范围等）。
     pub fn filter(mut self, f: MemoryFilter) -> Self {
         self.req.filter = f;
+        self
+    }
+    /// 若为 true，同一 chunk_group 的分块中仅保留得分最高的那条进入排序。
+    pub fn group_chunks(mut self, v: bool) -> Self {
+        self.req.group_chunks = v;
+        self
+    }
+    /// 实体锚定检索：按名称（大小写不敏感）查找实体，BFS 扩展后关联的记忆
+    /// 加入候选集并参与 graph_boost 加权。
+    pub fn entity_focus(mut self, v: Vec<String>) -> Self {
+        self.req.entity_focus = v;
+        self
+    }
+    /// 快捷设置过滤条件的 metadata_match（JSON 对象，键值对全部匹配）。
+    pub fn metadata_match(mut self, v: serde_json::Value) -> Self {
+        if let serde_json::Value::Object(map) = v {
+            self.req.filter.metadata_match = Some(map.into_iter().collect());
+        }
         self
     }
     /// 发送 recall 请求。

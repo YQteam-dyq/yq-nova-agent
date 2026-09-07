@@ -314,6 +314,7 @@ async fn run() -> NovaResult<()> {
                 tags: &tags,
                 embed: args.embed,
                 extract_graph: args.extract_graph,
+                chunk_options: None,
             };
             let out = memory.remember(input).await?;
             if args.json {
@@ -351,6 +352,8 @@ async fn run() -> NovaResult<()> {
                 rrf_k: None,
                 rank_weights: None,
                 filter: Default::default(),
+                group_chunks: false,
+                entity_focus: Vec::new(),
             };
             let out = memory.recall(input).await?;
             if args.json {

@@ -105,6 +105,10 @@ pub trait EntityRepository: Repository<EntityRecord> {
     /// Delete an entity. Relations referencing it are deleted by FK CASCADE.
     async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
 
+    /// Find entities by exact name (case-insensitive). Returns all matching
+    /// entities regardless of type.
+    async fn find_by_name(&self, db: &Database, name: &str) -> NovaResult<Vec<EntityRecord>>;
+
     /// List entities matching a simple prefix-name / type filter.
     async fn list(
         &self,
@@ -262,6 +266,25 @@ impl EntityRepository for SqliteEntityRepository {
             return Err(NovaError::not_found(format!("entity {uuid}")));
         }
         Ok(())
+    }
+
+    async fn find_by_name(
+        &self,
+        db: &Database,
+        name: &str,
+    ) -> NovaResult<Vec<EntityRecord>> {
+        let sql = "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at \
+                   FROM entities WHERE LOWER(name) = LOWER(?1) ORDER BY updated_at DESC";
+        let rows = sqlx::query(sql)
+            .bind(name)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(row_to_entity(&row)?);
+        }
+        Ok(out)
     }
 
     async fn list(

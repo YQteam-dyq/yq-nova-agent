@@ -111,6 +111,7 @@ pub trait RelationRepository: Repository<RelationRecord> {
 
     async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<RelationRecord>;
     async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
+    async fn delete_by_memory(&self, db: &Database, memory_uuid: Uuid) -> NovaResult<usize>;
 
     /// Return all edges originating from `entity_uuid` (optionally matching
     /// only a specific `predicate`). Direction is OUT; for incoming edges
@@ -143,6 +144,8 @@ pub trait RelationRepository: Repository<RelationRecord> {
         direction: Direction,
         max_depth: u8,
         max_nodes: usize,
+        predicate_whitelist: &[String],
+        min_confidence: f32,
     ) -> NovaResult<Vec<TraverseNode>>;
 }
 
@@ -304,6 +307,15 @@ impl RelationRepository for SqliteRelationRepository {
         Ok(())
     }
 
+    async fn delete_by_memory(&self, db: &Database, memory_uuid: Uuid) -> NovaResult<usize> {
+        let res = sqlx::query("DELETE FROM relations WHERE memory_uuid = ?1")
+            .bind(memory_uuid.to_string())
+            .execute(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
+        Ok(res.rows_affected() as usize)
+    }
+
     async fn list_outgoing(
         &self,
         db: &Database,
@@ -387,29 +399,32 @@ impl RelationRepository for SqliteRelationRepository {
         direction: Direction,
         max_depth: u8,
         max_nodes: usize,
+        predicate_whitelist: &[String],
+        min_confidence: f32,
     ) -> NovaResult<Vec<TraverseNode>> {
-        let max_depth = max_depth.min(8); // safety cap: 256^3 nodes max
+        let max_depth = max_depth.min(8);
         let max_nodes = max_nodes.min(1024);
 
-        // EntityRepo impl for rehydrating EntityRecords — we only need
-        // get_by_uuid, so create a throwaway instance.
         let entity_repo = crate::storage::entity::SqliteEntityRepository::new();
         let start = entity_repo.get_by_uuid(db, start_entity).await.map_err(|_| {
             NovaError::validation(format!("bfs start_entity {start_entity} does not exist"))
         })?;
 
-        // Build adjacency maps: for each entity uuid, list of neighbour
-        // uuids reachable by an OUT (out_map) or IN (in_map) edge.
-        // Pulling ALL edges is acceptable for small MVP graphs; upgrade to
-        // per-level queries when graph sizes grow.
-        let all_edges: Vec<(String, String)> =
-            sqlx::query_as("SELECT source_uuid, target_uuid FROM relations")
+        let all_edges: Vec<(String, String, String, f64)> =
+            sqlx::query_as("SELECT source_uuid, target_uuid, predicate, confidence FROM relations")
                 .fetch_all(&db.pool)
                 .await
                 .map_err(NovaError::storage)?;
         let mut out_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut in_map: HashMap<String, Vec<String>> = HashMap::new();
-        for (s, t) in all_edges {
+        for (s, t, p, c) in all_edges {
+            if !predicate_whitelist.is_empty() && !predicate_whitelist.contains(&p) {
+                continue;
+            }
+            let confidence = c as f32;
+            if confidence < min_confidence {
+                continue;
+            }
             out_map.entry(s.clone()).or_default().push(t.clone());
             in_map.entry(t).or_default().push(s);
         }
@@ -708,7 +723,7 @@ mod tests {
         let incs = rr.list_incoming(&db, b, None, 100).await.unwrap();
         assert_eq!(incs.len(), 2);
 
-        let nodes = rr.bfs_traverse(&db, a, Direction::Out, 3, 100).await.unwrap();
+        let nodes = rr.bfs_traverse(&db, a, Direction::Out, 3, 100, &[], 0.0).await.unwrap();
         // a → b, a → c → b, unique entities = {a, b, c}
         let ids: HashSet<Uuid> = nodes.iter().map(|n| n.entity.uuid).collect();
         assert_eq!(ids.len(), 3);

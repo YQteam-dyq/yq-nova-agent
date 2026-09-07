@@ -89,6 +89,9 @@ pub struct ForgetOutput {
     pub gc_entities: usize,
     /// When `gc_graph = true`: number of orphan relation rows pruned.
     pub gc_relations: usize,
+    /// When `mode == Hard` and `gc_graph == true`: number of relation rows
+    /// deleted because their `memory_uuid` referenced a forgotten memory.
+    pub relations_cleaned: usize,
     /// Actual mode applied (handy for echo/audit logs).
     pub mode: ForgetMode,
 }
@@ -128,6 +131,7 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
 
     // --- 2. Apply the per-uuid action ---------------------------------------
     let mut affected = 0usize;
+    let mut relations_cleaned = 0usize;
     for u in &uuids {
         match input.mode {
             ForgetMode::Soft => {
@@ -137,6 +141,10 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
                 svc.memory_repo.update_status(&svc.database, *u, MemoryStatus::Archived).await?;
             },
             ForgetMode::Hard => {
+                if input.gc_graph {
+                    relations_cleaned +=
+                        svc.relation_repo.delete_by_memory(&svc.database, *u).await?;
+                }
                 // Delete vector row first (FK cascade could delete it too but
                 // doing it explicitly means we can count removed embeddings).
                 svc.vector_store.delete_vector(*u).await.ok();
@@ -172,6 +180,7 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
         cascade_embeddings,
         gc_entities,
         gc_relations,
+        relations_cleaned,
         mode: input.mode,
     })
 }
@@ -216,6 +225,8 @@ mod tests {
     use crate::config::StorageConfig;
     use crate::memory::ops_remember::{RememberInput, service_for_tests};
     use crate::storage::{Database, MemoryStatus};
+    use crate::storage::entity::UpsertEntityInput;
+    use crate::storage::relation::InsertRelationInput;
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-forget-{}", Uuid::new_v4()));
@@ -345,5 +356,130 @@ mod tests {
             .unwrap();
         // Exactly 3 rows even though 10 match the (empty-except-min) filter.
         assert_eq!(out.affected_memories, 3);
+    }
+
+    async fn seed_memory_with_relation(
+        svc: &crate::memory::MemoryService,
+    ) -> (Uuid, Uuid) {
+        let mem = svc
+            .remember(RememberInput {
+                content: "relation test memory",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let src = svc
+            .entity_repo
+            .upsert(
+                &svc.database,
+                UpsertEntityInput { name: "Source", r#type: "test", description: None, metadata: None },
+            )
+            .await
+            .unwrap()
+            .uuid();
+        let tgt = svc
+            .entity_repo
+            .upsert(
+                &svc.database,
+                UpsertEntityInput { name: "Target", r#type: "test", description: None, metadata: None },
+            )
+            .await
+            .unwrap()
+            .uuid();
+        svc.relation_repo
+            .insert(
+                &svc.database,
+                InsertRelationInput {
+                    source_uuid: src,
+                    target_uuid: tgt,
+                    predicate: "related_to",
+                    confidence: 1.0,
+                    memory_uuid: Some(mem.uuid),
+                    metadata: None,
+                    idempotent: false,
+                },
+            )
+            .await
+            .unwrap();
+        (mem.uuid, src)
+    }
+
+    #[tokio::test]
+    async fn forget_hard_with_gc_graph_cleans_relations() {
+        let svc = temp_svc().await;
+        let (mem_uuid, src_uuid) = seed_memory_with_relation(&svc).await;
+
+        let out = svc
+            .forget(ForgetInput {
+                target: ForgetTarget::One(mem_uuid),
+                mode: ForgetMode::Hard,
+                gc_graph: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.affected_memories, 1);
+        assert_eq!(out.relations_cleaned, 1);
+        let rels = svc.relation_repo.list_outgoing(&svc.database, src_uuid, None, 100).await.unwrap();
+        assert!(rels.is_empty(), "relation should have been deleted");
+    }
+
+    #[tokio::test]
+    async fn forget_soft_does_not_clean_relations() {
+        let svc = temp_svc().await;
+        let (mem_uuid, _) = seed_memory_with_relation(&svc).await;
+
+        let out = svc
+            .forget(ForgetInput {
+                target: ForgetTarget::One(mem_uuid),
+                mode: ForgetMode::Soft,
+                gc_graph: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.affected_memories, 1);
+        assert_eq!(out.relations_cleaned, 0);
+    }
+
+    #[tokio::test]
+    async fn forget_archive_does_not_clean_relations() {
+        let svc = temp_svc().await;
+        let (mem_uuid, _) = seed_memory_with_relation(&svc).await;
+
+        let out = svc
+            .forget(ForgetInput {
+                target: ForgetTarget::One(mem_uuid),
+                mode: ForgetMode::Archive,
+                gc_graph: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.affected_memories, 1);
+        assert_eq!(out.relations_cleaned, 0);
+    }
+
+    #[tokio::test]
+    async fn forget_hard_without_gc_graph_does_not_clean_relations() {
+        let svc = temp_svc().await;
+        let (mem_uuid, _) = seed_memory_with_relation(&svc).await;
+
+        let out = svc
+            .forget(ForgetInput {
+                target: ForgetTarget::One(mem_uuid),
+                mode: ForgetMode::Hard,
+                gc_graph: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(out.affected_memories, 1);
+        assert_eq!(out.relations_cleaned, 0);
     }
 }

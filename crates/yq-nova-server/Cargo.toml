@@ -28,7 +28,7 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 
 # core
-yq-nova-core = { version = "0.2.0", path = "../yq-nova-core" }
+yq-nova-core = { version = "0.3.0", path = "../yq-nova-core" }
 
 # serialization
 serde = { workspace = true }

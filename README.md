@@ -220,3 +220,105 @@ dimensions = 1536
 **Business Source License 1.1** — see [LICENSE](LICENSE) for details.
 
 Non-production and personal use are **free**. Commercial and production use require a separate license. Contact the licensor for commercial licensing inquiries.
+
+---
+
+## Agent 集成
+
+### MCP 快速开始
+
+yq-nova 提供 MCP (Model Context Protocol) 服务，让你可以直接在支持 MCP 的 AI 客户端中使用 yq-nova 的 memory 能力。
+
+```bash
+# 启动 MCP 服务（假设 yq-nova-mcp 二进制已构建）
+./yq-nova-mcp serve --db-path ./nova.db
+```
+
+启动后，在 **Claude Desktop** 或其他 MCP 客户端的配置文件中添加：
+
+```json
+{
+  "mcpServers": {
+    "yq-nova": {
+      "command": "./yq-nova-mcp",
+      "args": ["serve", "--db-path", "./nova.db"]
+    }
+  }
+}
+```
+
+MCP 服务暴露三个核心工具：`nova_remember`、`nova_recall`、`nova_forget`，AI 客户端会自动发现并调用。
+
+### OpenAI 工具调用 schema 示例
+
+以下 JSON schema 片段可直接用于 OpenAI function-calling：
+
+```json
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "nova_remember",
+      "description": "Store a memory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {"type": "string"},
+          "importance": {"type": "number", "default": 0.5},
+          "tags": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["content"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nova_recall",
+      "description": "Retrieve relevant memories",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "top_k": {"type": "integer", "default": 5}
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "nova_forget",
+      "description": "Archive or delete a memory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "uuid": {"type": "string"},
+          "mode": {"type": "string", "enum": ["soft", "archive", "hard"], "default": "soft"}
+        },
+        "required": ["uuid"]
+      }
+    }
+  }
+]
+```
+
+典型的 OpenAI function-calling 调用流程：
+
+```
+1. 将上述 schema 作为 tools 参数传给 chat.completions.create()
+2. 当模型返回 tool_calls 时，解析 name 和 arguments
+3. 根据 name 调用 yq-nova HTTP API（remember / recall / forget）
+4. 将结果作为 tool 消息返回给模型继续对话
+```
+
+完整可运行示例见 [`python/examples/openai_memory_tools.py`](python/examples/openai_memory_tools.py)。
+
+### LangChain / LlamaIndex 对接思路
+
+yq-nova 可以轻松集成到 LangChain 或 LlamaIndex 的 agent 工作流中：
+
+- **LangChain**: 通过 `httpx` 或标准 `urllib` 调用 yq-nova HTTP API，将 `remember` / `recall` / `forget` 封装为 `Tool` 实例，然后注册到 `AgentExecutor` 或 `create_openai_tools_agent`。
+- **LlamaIndex**: 通过 `FunctionTool` 将 yq-nova 的操作包装成 `ToolMetadata`，定义对应的 JSON schema 后即可作为 `OpenAIAgent` 或 `ReActAgent` 的工具使用。
+- **通用原则**: 无论使用哪种框架，核心都是将 yq-nova 的三个操作（remember / recall / forget）映射为 function-calling 工具 schema，然后通过 HTTP 客户端调用 yq-nova 服务端 API。

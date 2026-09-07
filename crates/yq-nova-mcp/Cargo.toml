@@ -1,0 +1,22 @@
+[package]
+name = "yq-nova-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+yq-nova-core = { path = "../yq-nova-core" }
+
+[[bin]]
+name = "yq-nova-mcp"
+path = "src/main.rs"
