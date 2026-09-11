@@ -158,7 +158,7 @@ yq-nova stats
                │
 ┌──────────────▼──────────────────────────────────┐
 │              yq-nova-server                      │
-│  axum HTTP · DTO validation · middleware stack   │
+│  axum HTTP · DTO validation · middleware st## CIThis repository uses GitHub Actions for CI. See [ci.yml](.github/workflows/ci.yml).ack   │
 └──────────────┬──────────────────────────────────┘
                │
 ┌──────────────▼──────────────────────────────────┐
@@ -322,3 +322,6 @@ yq-nova 可以轻松集成到 LangChain 或 LlamaIndex 的 agent 工作流中：
 - **LangChain**: 通过 `httpx` 或标准 `urllib` 调用 yq-nova HTTP API，将 `remember` / `recall` / `forget` 封装为 `Tool` 实例，然后注册到 `AgentExecutor` 或 `create_openai_tools_agent`。
 - **LlamaIndex**: 通过 `FunctionTool` 将 yq-nova 的操作包装成 `ToolMetadata`，定义对应的 JSON schema 后即可作为 `OpenAIAgent` 或 `ReActAgent` 的工具使用。
 - **通用原则**: 无论使用哪种框架，核心都是将 yq-nova 的三个操作（remember / recall / forget）映射为 function-calling 工具 schema，然后通过 HTTP 客户端调用 yq-nova 服务端 API。
+
+
+<!-- t -->
