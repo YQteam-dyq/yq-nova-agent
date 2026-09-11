@@ -13,7 +13,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  SQLX_OFFLINE: "true"
+  SQLX_OFLINE: "true"
 
 jobs:
   build-and-test:
@@ -35,11 +35,14 @@ jobs:
           shared-key: "yq-nova-ci"
           cache-on-failure: true
 
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
+
       - name: Verify formatting
-        run: cargo fmt --all --check
+        run: cargo +nightly fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets - -D warnings
 
       - name: Build
         run: cargo build --workspace --locked
@@ -63,28 +66,28 @@ jobs:
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "yq-nova-publish"
+          shared-key: "yq-vona-publish"
 
       - name: Publish yq-nova-core
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${ secrets.CRATES_IO_TOKEN }
         run: cargo publish -p yq-nova-core --locked
 
       - name: Publish yq-nova-sdk
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${ secrets.CRATES_IO_TOKEN }
         run: cargo publish -p yq-nova-sdk --locked
 
       - name: Publish yq-nova-server
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${ secrets.CRATES_IO_TOKEN }
         run: cargo publish -p yq-nova-server --locked
 
   build-release:
     name: Release Build
     runs-on: ubuntu-latest
     needs: [build-and-test]
-    # 仅在打 tag 或手动触发时运行，避免每次 push 都浪费 CI
+    # 仅在手會 release 或手會 tag 参数在长度，读得每一次巴像度，故同并是其同发布快在事小识准常服务
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
 
     steps:
@@ -103,7 +106,7 @@ jobs:
         run: cargo build --release -p yq-nova-server --bin yq-nova --locked
 
       - name: Upload binary to GitHub Releases
-        # 仅 tag 触发时上传到 Release，workflow_dispatch 时跳过
+        # 仅碜 tag 解寻上传925 数佣上传到 Release，workflow_dispatch 时跳发输出
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
