@@ -1,9 +1,9 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 use crate::{
@@ -16,7 +16,6 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationRecord {
-
     pub id: i64,
 
     pub uuid: Uuid,
@@ -38,7 +37,6 @@ pub struct RelationRecord {
 
 #[derive(Debug, Clone)]
 pub struct InsertRelationInput<'a> {
-
     pub source_uuid: Uuid,
 
     pub target_uuid: Uuid,
@@ -56,7 +54,6 @@ pub struct InsertRelationInput<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertRelationOutcome {
-
     Inserted(Uuid),
 
     Updated(Uuid),
@@ -79,7 +76,6 @@ impl InsertRelationOutcome {
 
 #[async_trait]
 pub trait RelationRepository: Repository<RelationRecord> {
-
     async fn insert(
         &self,
         db: &Database,
@@ -192,8 +188,8 @@ impl RelationRepository for SqliteRelationRepository {
 
         if input.idempotent {
             let existing: Option<(i64, String, f64)> = sqlx::query_as(
-                "SELECT id, uuid, confidence FROM relations \
-                 WHERE source_uuid = ?1 AND predicate = ?2 AND target_uuid = ?3",
+                "SELECT id, uuid, confidence FROM relations WHERE source_uuid = ?1 AND predicate \
+                 = ?2 AND target_uuid = ?3",
             )
             .bind(input.source_uuid.to_string())
             .bind(pred)
@@ -225,9 +221,8 @@ impl RelationRepository for SqliteRelationRepository {
         let uuid = Uuid::new_v4();
         let now = Utc::now().timestamp();
         sqlx::query(
-            "INSERT INTO relations (uuid, source_uuid, target_uuid, predicate, \
-             confidence, memory_uuid, metadata_json, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO relations (uuid, source_uuid, target_uuid, predicate, confidence, \
+             memory_uuid, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(uuid.to_string())
         .bind(input.source_uuid.to_string())
@@ -245,9 +240,8 @@ impl RelationRepository for SqliteRelationRepository {
 
     async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<RelationRecord> {
         let row = sqlx::query(
-            "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, \
-                    memory_uuid, metadata_json, created_at \
-             FROM relations WHERE uuid = ?1",
+            "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, memory_uuid, \
+             metadata_json, created_at FROM relations WHERE uuid = ?1",
         )
         .bind(uuid.to_string())
         .fetch_optional(&db.pool)
@@ -287,18 +281,16 @@ impl RelationRepository for SqliteRelationRepository {
     ) -> NovaResult<Vec<RelationRecord>> {
         let (sql, bind_pred): (String, bool) = match predicate {
             Some(p) if !p.is_empty() => (
-                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, \
-                 memory_uuid, metadata_json, created_at \
-                 FROM relations WHERE source_uuid = ?1 AND predicate = ?2 \
-                 ORDER BY confidence DESC LIMIT ?3"
+                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, memory_uuid, \
+                 metadata_json, created_at FROM relations WHERE source_uuid = ?1 AND predicate = \
+                 ?2 ORDER BY confidence DESC LIMIT ?3"
                     .into(),
                 true,
             ),
             _ => (
-                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, \
-                 memory_uuid, metadata_json, created_at \
-                 FROM relations WHERE source_uuid = ?1 \
-                 ORDER BY confidence DESC LIMIT ?2"
+                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, memory_uuid, \
+                 metadata_json, created_at FROM relations WHERE source_uuid = ?1 ORDER BY \
+                 confidence DESC LIMIT ?2"
                     .into(),
                 false,
             ),
@@ -325,18 +317,16 @@ impl RelationRepository for SqliteRelationRepository {
     ) -> NovaResult<Vec<RelationRecord>> {
         let (sql, bind_pred): (String, bool) = match predicate {
             Some(p) if !p.is_empty() => (
-                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, \
-                 memory_uuid, metadata_json, created_at \
-                 FROM relations WHERE target_uuid = ?1 AND predicate = ?2 \
-                 ORDER BY confidence DESC LIMIT ?3"
+                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, memory_uuid, \
+                 metadata_json, created_at FROM relations WHERE target_uuid = ?1 AND predicate = \
+                 ?2 ORDER BY confidence DESC LIMIT ?3"
                     .into(),
                 true,
             ),
             _ => (
-                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, \
-                 memory_uuid, metadata_json, created_at \
-                 FROM relations WHERE target_uuid = ?1 \
-                 ORDER BY confidence DESC LIMIT ?2"
+                "SELECT id, uuid, source_uuid, target_uuid, predicate, confidence, memory_uuid, \
+                 metadata_json, created_at FROM relations WHERE target_uuid = ?1 ORDER BY \
+                 confidence DESC LIMIT ?2"
                     .into(),
                 false,
             ),
@@ -397,8 +387,11 @@ impl RelationRepository for SqliteRelationRepository {
         let mut queue: VecDeque<(String, u8, Vec<Uuid>)> = VecDeque::new();
         queue.push_back((start_s, 0, vec![start_entity]));
 
-        let mut results: Vec<TraverseNode> =
-            vec![TraverseNode { entity: start, depth: 0, path: vec![start_entity] }];
+        let mut results: Vec<TraverseNode> = vec![TraverseNode {
+            entity: start,
+            depth: 0,
+            path: vec![start_entity],
+        }];
 
         while let Some((node_s, depth, path)) = queue.pop_front() {
             if depth >= max_depth || results.len() >= max_nodes {
@@ -427,7 +420,7 @@ impl RelationRepository for SqliteRelationRepository {
                     .map_err(|e| NovaError::storage_msg(format!("bad nb uuid: {e}")))?;
                 let nb_ent: EntityRecord = match entity_repo.get_by_uuid(db, nb_uuid).await {
                     Ok(e) => e,
-                    Err(_) => continue, 
+                    Err(_) => continue,
                 };
                 let mut nb_path = path.clone();
                 nb_path.push(nb_uuid);
@@ -488,8 +481,10 @@ fn ts_to_dt(ts: i64) -> NovaResult<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StorageConfig;
-    use crate::storage::entity::{EntityRepository, SqliteEntityRepository, UpsertEntityInput};
+    use crate::{
+        config::StorageConfig,
+        storage::entity::{EntityRepository, SqliteEntityRepository, UpsertEntityInput},
+    };
 
     async fn temp_db() -> Database {
         let dir = std::env::temp_dir().join(format!("yq-nova-m2-rel-{}", Uuid::new_v4()));
@@ -508,7 +503,12 @@ mod tests {
         let au = er
             .upsert(
                 db,
-                UpsertEntityInput { name: a.0, r#type: a.1, description: None, metadata: None },
+                UpsertEntityInput {
+                    name: a.0,
+                    r#type: a.1,
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap()
@@ -516,7 +516,12 @@ mod tests {
         let bu = er
             .upsert(
                 db,
-                UpsertEntityInput { name: b.0, r#type: b.1, description: None, metadata: None },
+                UpsertEntityInput {
+                    name: b.0,
+                    r#type: b.1,
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap()
@@ -649,12 +654,17 @@ mod tests {
             let cu = er
                 .upsert(
                     &db,
-                    UpsertEntityInput { name: "C", r#type: "x", description: None, metadata: None },
+                    UpsertEntityInput {
+                        name: "C",
+                        r#type: "x",
+                        description: None,
+                        metadata: None,
+                    },
                 )
                 .await
                 .unwrap()
                 .uuid();
-            (cu, a) 
+            (cu, a)
         };
         for (src, tgt, pred) in [(a, b, "a→b"), (a, c, "a→c"), (c, b, "c→b")] {
             rr.insert(

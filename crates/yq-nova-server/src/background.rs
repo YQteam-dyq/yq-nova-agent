@@ -1,4 +1,3 @@
-
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -8,7 +7,6 @@ use chrono::{DateTime, Utc};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-
 use yq_nova_core::{
     config::ForgettingConfig,
     error::NovaResult,
@@ -174,15 +172,17 @@ pub fn new_cancel_token() -> CancellationToken {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::{Duration as ChronoDur, Utc};
     use std::{sync::Arc, time::Duration as StdDuration};
+
+    use chrono::{Duration as ChronoDur, Utc};
     use yq_nova_core::{
         config::StorageConfig,
         embedding::MockEmbeddingProvider,
         memory::{RecallInput, RememberInput, SearchMode},
         storage::{Database, MemoryRepository, MemoryStatus, SqliteMemoryRepository},
     };
+
+    use super::*;
 
     fn tmp_db_path(tag: &str) -> StorageConfig {
         let mut p = std::env::temp_dir();
@@ -310,11 +310,18 @@ mod tests {
     async fn gc_skipped_when_disabled() {
         let (_db, memory) = setup("gc-disabled").await;
         memory
-            .remember(RememberInput { content: "hi", importance: 0.05, ..Default::default() })
+            .remember(RememberInput {
+                content: "hi",
+                importance: 0.05,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
-        let cfg = ForgettingConfig { stale_after: StdDuration::from_secs(1), ..Default::default() };
+        let cfg = ForgettingConfig {
+            stale_after: StdDuration::from_secs(1),
+            ..Default::default()
+        };
         assert_eq!(collect_garbage_once(&memory, &cfg).await.unwrap(), (0, 0));
     }
 

@@ -38,16 +38,15 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
 
     if let Some(keep) = keep_uuid {
         if !uuid_set.contains(&keep) {
-            return Err(NovaError::validation(
-                "merge: keep_uuid must be one of the uuids",
-            ));
+            return Err(NovaError::validation("merge: keep_uuid must be one of the uuids"));
         }
     }
 
     for u in &uuids {
-        svc.memory_repo.get_by_uuid(&svc.database, *u).await.map_err(|_| {
-            NovaError::validation(format!("merge: uuid {u} does not exist"))
-        })?;
+        svc.memory_repo
+            .get_by_uuid(&svc.database, *u)
+            .await
+            .map_err(|_| NovaError::validation(format!("merge: uuid {u} does not exist")))?;
     }
 
     let records = {
@@ -99,17 +98,16 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
             serde_json::Value::Object(m) => m,
             _ => serde_json::Map::new(),
         };
-        meta_obj.insert(
-            "merged_into".to_string(),
-            serde_json::Value::String(kept_uuid.to_string()),
-        );
+        meta_obj
+            .insert("merged_into".to_string(), serde_json::Value::String(kept_uuid.to_string()));
         svc.memory_repo
             .update_metadata(&svc.database, *u, &serde_json::Value::Object(meta_obj))
             .await?;
     }
 
     let merged_uuids_strs: Vec<String> = merged.iter().map(|u| u.to_string()).collect();
-    let placeholders: Vec<String> = (0..merged_uuids_strs.len()).map(|i| format!("?{}", i + 1)).collect();
+    let placeholders: Vec<String> =
+        (0..merged_uuids_strs.len()).map(|i| format!("?{}", i + 1)).collect();
     let sql = format!(
         "UPDATE relations SET memory_uuid = ?{} WHERE memory_uuid IN ({})",
         merged_uuids_strs.len() + 1,
@@ -134,10 +132,12 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::memory::ops_remember::{RememberInput, service_for_tests};
-    use crate::storage::{Database, MemoryStatus, entity::EntityRepository, relation::RelationRepository};
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        memory::ops_remember::{RememberInput, service_for_tests},
+        storage::{Database, MemoryStatus, entity::EntityRepository, relation::RelationRepository},
+    };
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-merge-{}", Uuid::new_v4()));
@@ -245,17 +245,11 @@ mod tests {
 
         let kept = svc.get_memory(a.uuid).await.unwrap();
         assert_eq!(kept.status, MemoryStatus::Active);
-        assert_eq!(
-            kept.metadata["merged_from"],
-            serde_json::json!([b.uuid.to_string()])
-        );
+        assert_eq!(kept.metadata["merged_from"], serde_json::json!([b.uuid.to_string()]));
 
         let archived = svc.get_memory(b.uuid).await.unwrap();
         assert_eq!(archived.status, MemoryStatus::Archived);
-        assert_eq!(
-            archived.metadata["merged_into"],
-            serde_json::json!(a.uuid.to_string())
-        );
+        assert_eq!(archived.metadata["merged_into"], serde_json::json!(a.uuid.to_string()));
     }
 
     #[tokio::test]
@@ -361,24 +355,25 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(out.remapped_relations, 2, "two relations pointing to b should be remapped to a");
+        assert_eq!(
+            out.remapped_relations, 2,
+            "two relations pointing to b should be remapped to a"
+        );
 
-        let rels_b: Vec<(String,)> = sqlx::query_as(
-            "SELECT memory_uuid FROM relations WHERE memory_uuid = ?1",
-        )
-        .bind(b.uuid.to_string())
-        .fetch_all(pool)
-        .await
-        .unwrap();
+        let rels_b: Vec<(String,)> =
+            sqlx::query_as("SELECT memory_uuid FROM relations WHERE memory_uuid = ?1")
+                .bind(b.uuid.to_string())
+                .fetch_all(pool)
+                .await
+                .unwrap();
         assert_eq!(rels_b.len(), 0, "no relations should point to b anymore");
 
-        let rels_a: Vec<(String,)> = sqlx::query_as(
-            "SELECT memory_uuid FROM relations WHERE memory_uuid = ?1",
-        )
-        .bind(a.uuid.to_string())
-        .fetch_all(pool)
-        .await
-        .unwrap();
+        let rels_a: Vec<(String,)> =
+            sqlx::query_as("SELECT memory_uuid FROM relations WHERE memory_uuid = ?1")
+                .bind(a.uuid.to_string())
+                .fetch_all(pool)
+                .await
+                .unwrap();
         assert_eq!(rels_a.len(), 3, "all three relations should point to a now");
     }
 
@@ -509,9 +504,6 @@ mod tests {
 
         let archived = svc.get_memory(b.uuid).await.unwrap();
         assert_eq!(archived.status, MemoryStatus::Archived);
-        assert_eq!(
-            archived.metadata["merged_into"],
-            serde_json::json!(a.uuid.to_string())
-        );
+        assert_eq!(archived.metadata["merged_into"], serde_json::json!(a.uuid.to_string()));
     }
 }

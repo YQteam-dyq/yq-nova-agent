@@ -1,4 +1,3 @@
-
 use std::{fs, path::PathBuf, time::Duration};
 
 use figment::{
@@ -10,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{NovaError, NovaResult};
 
 pub(crate) mod duration_seconds {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(d: &Duration, ser: S) -> Result<S::Ok, S::Error> {
         d.as_secs().serialize(ser)
@@ -40,7 +40,6 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
-
     pub bind: String,
 
     pub concurrency: usize,
@@ -68,7 +67,6 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
-
     pub db_path: PathBuf,
 
     pub wal_mode: bool,
@@ -116,7 +114,6 @@ impl Default for StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbeddingConfig {
-
     pub default_provider: String,
 
     pub openai_compatible: std::collections::BTreeMap<String, OpenAiCompatConfig>,
@@ -139,7 +136,6 @@ impl Default for EmbeddingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiCompatConfig {
-
     pub base_url: String,
 
     pub api_key: String,
@@ -173,7 +169,6 @@ impl Default for OpenAiCompatConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FastEmbedConfig {
-
     pub model_name: String,
 
     pub dimensions: usize,
@@ -184,7 +179,6 @@ pub struct FastEmbedConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ForgettingConfig {
-
     pub enabled: bool,
 
     #[serde(with = "duration_seconds")]
@@ -213,7 +207,6 @@ impl Default for ForgettingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GraphConfig {
-
     pub auto_extract: bool,
 
     pub extract_llm: String,
@@ -226,7 +219,6 @@ pub struct GraphConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiChatConfig {
-
     pub base_url: String,
 
     pub api_key: String,
@@ -251,21 +243,21 @@ impl Default for OpenAiChatConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JobsConfig {
-
     #[serde(with = "duration_seconds")]
     pub ttl_interval: Duration,
 }
 
 impl Default for JobsConfig {
     fn default() -> Self {
-        Self { ttl_interval: Duration::from_secs(60) }
+        Self {
+            ttl_interval: Duration::from_secs(60),
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfig {
-
     pub level: String,
 
     pub json_format: bool,
@@ -299,9 +291,7 @@ impl Default for LoggingConfig {
 }
 
 impl Config {
-
     pub fn load() -> NovaResult<Self> {
-
         let toml_path = std::env::var("YQ_NOVA_CONFIG").map(PathBuf::from).ok().or_else(|| {
             let local = PathBuf::from(DEFAULT_CONFIG_FILENAME);
             if local.exists() { Some(local) } else { None }

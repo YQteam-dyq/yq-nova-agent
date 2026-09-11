@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -22,7 +21,6 @@ pub struct TagRecord {
 
 #[async_trait]
 pub trait TagRepository: Repository<TagRecord> {
-
     async fn attach_tags(
         &self,
         db: &Database,
@@ -108,7 +106,6 @@ impl TagRepository for SqliteTagRepository {
         memory_uuid: Uuid,
         new_tags: &[String],
     ) -> NovaResult<()> {
-
         memory::attach_tags(&db.pool, memory_uuid, new_tags).await?;
 
         let current = memory::list_tags_of_memory(&db.pool, memory_uuid).await?;
@@ -140,11 +137,8 @@ impl TagRepository for SqliteTagRepository {
         let offset = offset as i64;
         let rows = sqlx::query(
             "SELECT t.id, t.name, t.color, t.created_at, COUNT(mt.memory_uuid) AS memory_count \
-             FROM tags t \
-             LEFT JOIN memory_tags mt ON mt.tag_id = t.id \
-             GROUP BY t.id, t.name, t.color, t.created_at \
-             ORDER BY memory_count DESC, t.name ASC \
-             LIMIT ? OFFSET ?",
+             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id GROUP BY t.id, t.name, \
+             t.color, t.created_at ORDER BY memory_count DESC, t.name ASC LIMIT ? OFFSET ?",
         )
         .bind(limit)
         .bind(offset)
@@ -161,10 +155,8 @@ impl TagRepository for SqliteTagRepository {
     async fn get_tag_by_name(&self, db: &Database, name: &str) -> NovaResult<Option<TagRecord>> {
         let row = sqlx::query(
             "SELECT t.id, t.name, t.color, t.created_at, COUNT(mt.memory_uuid) AS memory_count \
-             FROM tags t \
-             LEFT JOIN memory_tags mt ON mt.tag_id = t.id \
-             WHERE t.name = ?1 \
-             GROUP BY t.id, t.name, t.color, t.created_at",
+             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id WHERE t.name = ?1 GROUP BY \
+             t.id, t.name, t.color, t.created_at",
         )
         .bind(name)
         .fetch_optional(&db.pool)
@@ -196,8 +188,10 @@ fn row_to_tag(row: &sqlx::sqlite::SqliteRow) -> NovaResult<TagRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StorageConfig;
-    use crate::storage::memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository};
+    use crate::{
+        config::StorageConfig,
+        storage::memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
+    };
 
     async fn temp_db() -> Database {
         let dir = std::env::temp_dir().join(format!("yq-nova-m2-tag-{}", Uuid::new_v4()));
@@ -253,7 +247,11 @@ mod tests {
         ] {
             mem.insert(
                 &db,
-                InsertMemoryInput { content: text, tags: &tag_list, ..Default::default() },
+                InsertMemoryInput {
+                    content: text,
+                    tags: &tag_list,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();

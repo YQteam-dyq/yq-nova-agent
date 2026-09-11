@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -22,7 +21,6 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct RecallInput<'a> {
-
     pub query: &'a str,
 
     pub top_k: usize,
@@ -86,7 +84,6 @@ pub struct RecallOutput {
 }
 
 pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<RecallOutput> {
-
     let query = input.query.trim();
     if query.is_empty() {
         return Err(NovaError::validation("recall: query must not be empty"));
@@ -161,7 +158,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
                     for ent in entities {
                         focus_entity_uuids.insert(ent.uuid);
                     }
-                }
+                },
                 Err(_) => continue,
             }
         }
@@ -178,8 +175,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
                     }
                 }
             }
-            let entity_strs: Vec<String> =
-                visited_entities.iter().map(|u| u.to_string()).collect();
+            let entity_strs: Vec<String> = visited_entities.iter().map(|u| u.to_string()).collect();
             let ph: Vec<&str> = entity_strs.iter().map(|_| "?").collect();
             let phs = ph.join(",");
             let sql = format!(
@@ -196,7 +192,8 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
             for s in &entity_strs {
                 q = q.bind(s);
             }
-            if let Ok(mem_strs) = q.fetch_all(&svc.database.pool).await.map_err(NovaError::storage) {
+            if let Ok(mem_strs) = q.fetch_all(&svc.database.pool).await.map_err(NovaError::storage)
+            {
                 for s in mem_strs {
                     if let Ok(u) = Uuid::parse_str(&s) {
                         graph_memories.push(u);
@@ -290,11 +287,16 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
 
             let rrf_limit = (top_k * 3).min(400);
             let ordered: Vec<Uuid> = rrf.into_iter().take(rrf_limit).map(|h| h.uuid).collect();
-            CollectedCandidates { ordered, sim_by_uuid, from_graph, keyword_scores }
+            CollectedCandidates {
+                ordered,
+                sim_by_uuid,
+                from_graph,
+                keyword_scores,
+            }
         },
     };
 
-    let _ = collected.keyword_scores; 
+    let _ = collected.keyword_scores;
 
     let mut records: Vec<MemoryRecord> = Vec::with_capacity(collected.ordered.len());
     for uuid in &collected.ordered {
@@ -326,7 +328,10 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
             std::collections::BTreeMap::new();
         let mut deduped: Vec<super::rank::RankedHit<'_>> = Vec::with_capacity(ranked.len());
         for rh in &ranked {
-            let group = rh.memory.metadata.get("chunk_group")
+            let group = rh
+                .memory
+                .metadata
+                .get("chunk_group")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             if let Some(ref g) = group {
@@ -361,7 +366,11 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         });
     }
 
-    Ok(RecallOutput { hits, total_candidates, query: query.to_string() })
+    Ok(RecallOutput {
+        hits,
+        total_candidates,
+        query: query.to_string(),
+    })
 }
 
 async fn expand_graph_memories(
@@ -370,7 +379,6 @@ async fn expand_graph_memories(
     opts: &GraphTraversalOpts,
     limit: usize,
 ) -> NovaResult<(Vec<Uuid>, BTreeSet<Uuid>)> {
-
     if seed_memory_uuids.is_empty() {
         return Ok((Vec::new(), BTreeSet::new()));
     }
@@ -487,7 +495,6 @@ pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
         }
     }
     if let Some(la_before) = f.last_accessed_before {
-
         let effective = r.last_accessed.unwrap_or(r.created_at);
         if effective >= la_before {
             return false;
@@ -521,7 +528,7 @@ pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
                     if actual != val {
                         return false;
                     }
-                }
+                },
                 None => return false,
             }
         }
@@ -532,11 +539,15 @@ pub(crate) fn passes_filter(r: &MemoryRecord, f: &MemoryFilter) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::memory::chunk::{ChunkOptions, SplitBy};
-    use crate::memory::ops_remember::{RememberInput, service_for_tests};
-    use crate::storage::{Database, MemorySource};
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        memory::{
+            chunk::{ChunkOptions, SplitBy},
+            ops_remember::{RememberInput, service_for_tests},
+        },
+        storage::{Database, MemorySource},
+    };
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-recall-{}", Uuid::new_v4()));
@@ -554,11 +565,21 @@ mod tests {
     #[tokio::test]
     async fn empty_query_and_bad_top_k_are_rejected() {
         let svc = temp_svc().await;
-        let err = svc.recall(RecallInput { query: "  ", ..Default::default() }).await.unwrap_err();
+        let err = svc
+            .recall(RecallInput {
+                query: "  ",
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
 
         let err = svc
-            .recall(RecallInput { query: "q", top_k: 0, ..Default::default() })
+            .recall(RecallInput {
+                query: "q",
+                top_k: 0,
+                ..Default::default()
+            })
             .await
             .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
@@ -629,7 +650,7 @@ mod tests {
             .unwrap();
         let _y = svc
             .remember(RememberInput {
-                content: "alpha alpha alpha", 
+                content: "alpha alpha alpha",
                 tags: &["y".into()],
                 importance: 0.99,
                 ..Default::default()
@@ -646,9 +667,17 @@ mod tests {
             .await
             .unwrap();
 
-        let f = MemoryFilter { tags_any: Some(vec!["z".to_string()]), ..Default::default() };
+        let f = MemoryFilter {
+            tags_any: Some(vec!["z".to_string()]),
+            ..Default::default()
+        };
         let out = svc
-            .recall(RecallInput { query: "beta", top_k: 5, filter: f, ..Default::default() })
+            .recall(RecallInput {
+                query: "beta",
+                top_k: 5,
+                filter: f,
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert!(out.hits.iter().all(|h| h.memory.uuid == zz.uuid));
@@ -674,7 +703,10 @@ mod tests {
             .await
             .unwrap();
 
-        let f = MemoryFilter { importance_min: Some(0.9), ..Default::default() };
+        let f = MemoryFilter {
+            importance_min: Some(0.9),
+            ..Default::default()
+        };
         let out = svc
             .recall(RecallInput {
                 query: "critical note",
@@ -690,7 +722,7 @@ mod tests {
 
         let low_mem = svc.get_memory(low.uuid).await.unwrap();
         assert_eq!(low_mem.access_count, 0);
-        let _ = (low,); 
+        let _ = (low,);
     }
 
     #[tokio::test]
@@ -715,7 +747,10 @@ mod tests {
             .await
             .unwrap();
 
-        let f = MemoryFilter { source_in: Some(vec![MemorySource::User]), ..Default::default() };
+        let f = MemoryFilter {
+            source_in: Some(vec![MemorySource::User]),
+            ..Default::default()
+        };
         let out = svc
             .recall(RecallInput {
                 query: "chocolate preference",
@@ -812,8 +847,10 @@ mod tests {
             overlap_grouped.len()
         );
 
-        let standalone_in_grouped = out_grouped.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
-        let standalone_in_no_group = out_no_group.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
+        let standalone_in_grouped =
+            out_grouped.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
+        let standalone_in_no_group =
+            out_no_group.hits.iter().any(|h| h.memory.uuid == standalone.uuid);
         assert_eq!(
             standalone_in_grouped, standalone_in_no_group,
             "standalone memory should be equally visible in both modes"
@@ -955,14 +992,16 @@ mod tests {
             .await
             .unwrap();
         let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
-        assert!(ids.contains(&m.uuid), "memory should still be recalled when entity_focus name is unknown");
+        assert!(
+            ids.contains(&m.uuid),
+            "memory should still be recalled when entity_focus name is unknown"
+        );
     }
 
     #[tokio::test]
     async fn entity_focus_anchors_memories_via_graph() {
         let svc = temp_svc().await;
-        use crate::storage::entity::UpsertEntityInput;
-        use crate::storage::relation::InsertRelationInput;
+        use crate::storage::{entity::UpsertEntityInput, relation::InsertRelationInput};
 
         let alice = svc
             .entity_repo
@@ -1010,10 +1049,9 @@ mod tests {
             .await
             .unwrap();
 
-        for (src, tgt, mem, pred) in [
-            (alice, bob, m1.uuid, "works_with"),
-            (alice, bob, m2.uuid, "knows"),
-        ] {
+        for (src, tgt, mem, pred) in
+            [(alice, bob, m1.uuid, "works_with"), (alice, bob, m2.uuid, "knows")]
+        {
             svc.relation_repo
                 .insert(
                     &svc.database,
@@ -1044,10 +1082,7 @@ mod tests {
             .unwrap();
         let ids: std::collections::HashSet<_> = out.hits.iter().map(|h| h.memory.uuid).collect();
         assert!(ids.contains(&m1.uuid), "m1 should be recalled (semantic match)");
-        assert!(
-            ids.contains(&m2.uuid),
-            "m2 should be recalled via entity_focus graph expansion"
-        );
+        assert!(ids.contains(&m2.uuid), "m2 should be recalled via entity_focus graph expansion");
         assert!(
             out.hits.iter().any(|h| h.from_graph && h.memory.uuid == m2.uuid),
             "m2 should be marked as from_graph"

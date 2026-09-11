@@ -1,4 +1,3 @@
-
 use std::{path::PathBuf, sync::Arc};
 
 use yq_nova_core::{
@@ -6,8 +5,7 @@ use yq_nova_core::{
     config::StorageConfig,
     embedding::{MockEmbeddingProvider, SharedEmbeddingProvider},
     error::ErrorCode,
-    graph::{GraphExtractOpts, GraphService},
-    graph::extractor::RegexWikiExtractor,
+    graph::{GraphExtractOpts, GraphService, extractor::RegexWikiExtractor},
     memory::MemoryService,
     storage::Database,
 };
@@ -83,11 +81,13 @@ async fn stats_reflect_counts() {
 
 #[tokio::test]
 async fn graph_extract_and_link_works() {
-
     let db_path = tmp_db("graph");
-    let db = Database::open(StorageConfig { db_path, ..Default::default() })
-        .await
-        .expect("open db");
+    let db = Database::open(StorageConfig {
+        db_path,
+        ..Default::default()
+    })
+    .await
+    .expect("open db");
     let embedding: SharedEmbeddingProvider = Arc::new(MockEmbeddingProvider::new(64));
     let memory = MemoryService::new(db.clone(), embedding);
     let graph = GraphService::with_parts(db.clone(), Arc::new(RegexWikiExtractor::new()));
@@ -96,7 +96,10 @@ async fn graph_extract_and_link_works() {
     let out = nova
         .extract_and_link(http_client::ExtractAndLinkRequest {
             text: "[[Alice]] works with [[Bob]]".into(),
-            opts: GraphExtractOpts { enabled: true, ..Default::default() },
+            opts: GraphExtractOpts {
+                enabled: true,
+                ..Default::default()
+            },
         })
         .await
         .expect("extract_and_link");
@@ -111,5 +114,5 @@ async fn health_returns_ok() {
     let h = nova.health().await.expect("health");
     assert_eq!(h.status, "ok");
     assert_eq!(h.version, yq_nova_core::VERSION);
-    let _ = Uuid::new_v4(); 
+    let _ = Uuid::new_v4();
 }

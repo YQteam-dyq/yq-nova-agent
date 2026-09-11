@@ -1,4 +1,3 @@
-
 use std::{path::PathBuf, sync::Arc};
 
 use yq_nova_core::{
@@ -19,7 +18,6 @@ use crate::http_client;
 
 #[derive(Clone)]
 pub struct EmbeddedNova {
-
     pub database: Database,
 
     pub memory: MemoryService,
@@ -28,22 +26,28 @@ pub struct EmbeddedNova {
 }
 
 impl EmbeddedNova {
-
     pub async fn open(db_path: impl Into<PathBuf>) -> NovaResult<Self> {
-        let database = Database::open(StorageConfig { db_path: db_path.into(), ..Default::default() })
-            .await?;
+        let database = Database::open(StorageConfig {
+            db_path: db_path.into(),
+            ..Default::default()
+        })
+        .await?;
         let embedding: SharedEmbeddingProvider = Arc::new(MockEmbeddingProvider::new(64));
         let memory = MemoryService::new(database.clone(), embedding);
         let graph = GraphService::new(database.clone());
-        Ok(Self { database, memory, graph })
+        Ok(Self {
+            database,
+            memory,
+            graph,
+        })
     }
 
-    pub fn from_services(
-        database: Database,
-        memory: MemoryService,
-        graph: GraphService,
-    ) -> Self {
-        Self { database, memory, graph }
+    pub fn from_services(database: Database, memory: MemoryService, graph: GraphService) -> Self {
+        Self {
+            database,
+            memory,
+            graph,
+        }
     }
 
     pub async fn remember(&self, req: http_client::RememberRequest) -> NovaResult<RememberOutput> {
@@ -133,7 +137,11 @@ impl EmbeddedNova {
         &self,
         req: http_client::ExportMemoriesRequest,
     ) -> NovaResult<http_client::ExportMemoriesResponse> {
-        let input = ExportInput { filter: req.filter, limit: req.limit, offset: req.offset };
+        let input = ExportInput {
+            filter: req.filter,
+            limit: req.limit,
+            offset: req.offset,
+        };
         let out = yq_nova_core::memory::ops_export::export_memories(&self.memory, input).await?;
         Ok(http_client::ExportMemoriesResponse {
             count: out.count,
@@ -159,8 +167,13 @@ impl EmbeddedNova {
                 expires_at: i.expires_at,
             })
             .collect();
-        let on_conflict = if req.on_conflict == "skip" { ConflictStrategy::Skip } else { ConflictStrategy::Skip };
-        let input = ImportInput { items, embed: req.embed, on_conflict };
+        let on_conflict =
+            if req.on_conflict == "skip" { ConflictStrategy::Skip } else { ConflictStrategy::Skip };
+        let input = ImportInput {
+            items,
+            embed: req.embed,
+            on_conflict,
+        };
         let out = yq_nova_core::memory::ops_import::import_memories(&self.memory, input).await?;
         Ok(http_client::ImportMemoriesResponse {
             received: out.received,
@@ -169,7 +182,10 @@ impl EmbeddedNova {
             errors: out
                 .errors
                 .into_iter()
-                .map(|e| http_client::ImportError { index: e.index, message: e.message })
+                .map(|e| http_client::ImportError {
+                    index: e.index,
+                    message: e.message,
+                })
                 .collect(),
         })
     }
@@ -193,7 +209,10 @@ impl EmbeddedNova {
             .await?;
         let uuid = outcome.uuid();
         let entity = self.graph.entity_repo.get_by_uuid(&self.graph.database, uuid).await?;
-        Ok(http_client::UpsertEntityResponse { outcome, entity })
+        Ok(http_client::UpsertEntityResponse {
+            outcome,
+            entity,
+        })
     }
 
     pub async fn traverse(
@@ -245,7 +264,9 @@ impl EmbeddedNova {
         Ok(http_client::StatsResponse {
             uptime_secs: 0,
             database_size_bytes: self.database.size_on_disk_bytes().unwrap_or(0),
-            memory_active: self.count("SELECT COUNT(*) FROM memory_items WHERE status = 'active'").await?,
+            memory_active: self
+                .count("SELECT COUNT(*) FROM memory_items WHERE status = 'active'")
+                .await?,
             memory_archived: self
                 .count("SELECT COUNT(*) FROM memory_items WHERE status = 'archived'")
                 .await?,

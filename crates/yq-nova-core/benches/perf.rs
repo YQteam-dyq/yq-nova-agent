@@ -1,20 +1,20 @@
-
 use std::sync::Arc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use tokio::runtime::Builder;
-
-use yq_nova_core::config::StorageConfig;
-use yq_nova_core::embedding::{EmbeddingProvider, MockEmbeddingProvider};
-use yq_nova_core::graph::{GraphService, TraverseOpts};
-use yq_nova_core::storage::{
-    Database,
-    entity::{EntityRepository, SqliteEntityRepository, UpsertEntityInput},
-    memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
-    relation::{InsertRelationInput, RelationRepository, SqliteRelationRepository},
-    vector::{SqliteVectorStore, VectorStore},
+use yq_nova_core::{
+    Uuid,
+    config::StorageConfig,
+    embedding::{EmbeddingProvider, MockEmbeddingProvider},
+    graph::{GraphService, TraverseOpts},
+    storage::{
+        Database,
+        entity::{EntityRepository, SqliteEntityRepository, UpsertEntityInput},
+        memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
+        relation::{InsertRelationInput, RelationRepository, SqliteRelationRepository},
+        vector::{SqliteVectorStore, VectorStore},
+    },
 };
-use yq_nova_core::Uuid;
 
 fn runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread().enable_all().build().expect("build tokio runtime")
@@ -39,7 +39,6 @@ fn bench_vector_knn(c: &mut Criterion) {
     let mut group = c.benchmark_group("vector_knn_linear_scan");
 
     for n in [1_000usize, 10_000, 100_000] {
-
         let store = rt.block_on(async {
             let db = temp_db("knn").await;
             let mem_repo = SqliteMemoryRepository::new();
@@ -48,7 +47,10 @@ fn bench_vector_knn(c: &mut Criterion) {
                 let mem_uuid = mem_repo
                     .insert(
                         &db,
-                        InsertMemoryInput { content: &format!("memory-{i}"), ..Default::default() },
+                        InsertMemoryInput {
+                            content: &format!("memory-{i}"),
+                            ..Default::default()
+                        },
                     )
                     .await
                     .expect("insert memory")
@@ -82,7 +84,6 @@ fn bench_graph_bfs(c: &mut Criterion) {
     let mut group = c.benchmark_group("graph_bfs_traverse");
 
     for n in [100usize, 300, 1000] {
-
         let (svc, start) = rt.block_on(async {
             let db = temp_db("bfs").await;
             let svc = GraphService::new(db);
@@ -136,8 +137,7 @@ fn bench_graph_bfs(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| {
-                let nodes =
-                    rt.block_on(svc.traverse_graph(black_box(start), opts.clone()));
+                let nodes = rt.block_on(svc.traverse_graph(black_box(start), opts.clone()));
                 black_box(nodes)
             });
         });
@@ -151,7 +151,6 @@ fn bench_embedding(c: &mut Criterion) {
     let mut group = c.benchmark_group("embedding_batch_throughput");
 
     for n in [100usize, 1000] {
-
         let texts: Vec<String> = (0..n)
             .map(|i| {
                 format!(

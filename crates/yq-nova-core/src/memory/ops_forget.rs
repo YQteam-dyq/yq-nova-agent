@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -14,7 +13,6 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ForgetMode {
-
     #[default]
     Soft,
 
@@ -54,7 +52,6 @@ impl Default for ForgetInput {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ForgetOutput {
-
     pub affected_memories: usize,
 
     pub cascade_embeddings: usize,
@@ -69,18 +66,13 @@ pub struct ForgetOutput {
 }
 
 pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<ForgetOutput> {
-
     let uuids: Vec<Uuid> = match input.target {
-        ForgetTarget::One(uuid) => {
-
-            match svc.memory_repo.get_by_uuid(&svc.database, uuid).await {
-                Ok(_) => vec![uuid],
-                Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => {
-
-                    return Err(e);
-                },
-                Err(e) => return Err(e),
-            }
+        ForgetTarget::One(uuid) => match svc.memory_repo.get_by_uuid(&svc.database, uuid).await {
+            Ok(_) => vec![uuid],
+            Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => {
+                return Err(e);
+            },
+            Err(e) => return Err(e),
         },
         ForgetTarget::Filter(f) => {
             let limit = input.batch_limit.min(10_000);
@@ -95,7 +87,10 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     };
 
     if uuids.is_empty() {
-        return Ok(ForgetOutput { mode: input.mode, ..Default::default() });
+        return Ok(ForgetOutput {
+            mode: input.mode,
+            ..Default::default()
+        });
     }
 
     let mut affected = 0usize;
@@ -124,14 +119,13 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     let mut gc_entities = 0usize;
     let mut gc_relations = 0usize;
     if input.gc_graph {
-
         let (ent, rel) = gc_orphan_entities(svc).await.unwrap_or((0, 0));
         gc_entities = ent;
         gc_relations = rel;
     }
 
     let cascade_embeddings = match input.mode {
-        ForgetMode::Hard => affected, 
+        ForgetMode::Hard => affected,
         _ => 0,
     };
 
@@ -174,12 +168,14 @@ async fn gc_orphan_entities(svc: &MemoryService) -> NovaResult<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::memory::ops_remember::{RememberInput, service_for_tests};
-    use crate::storage::{Database, MemoryStatus};
-    use crate::storage::entity::UpsertEntityInput;
-    use crate::storage::relation::InsertRelationInput;
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        memory::ops_remember::{RememberInput, service_for_tests},
+        storage::{
+            Database, MemoryStatus, entity::UpsertEntityInput, relation::InsertRelationInput,
+        },
+    };
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-forget-{}", Uuid::new_v4()));
@@ -240,7 +236,11 @@ mod tests {
     async fn forget_hard_removes_row_completely() {
         let svc = temp_svc().await;
         let a = svc
-            .remember(RememberInput { content: "one off", importance: 0.1, ..Default::default() })
+            .remember(RememberInput {
+                content: "one off",
+                importance: 0.1,
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -296,7 +296,10 @@ mod tests {
             .unwrap();
         }
 
-        let f = MemoryFilter { importance_min: Some(0.0), ..Default::default() };
+        let f = MemoryFilter {
+            importance_min: Some(0.0),
+            ..Default::default()
+        };
         let out = svc
             .forget(ForgetInput {
                 target: ForgetTarget::Filter(f.clone()),
@@ -310,9 +313,7 @@ mod tests {
         assert_eq!(out.affected_memories, 3);
     }
 
-    async fn seed_memory_with_relation(
-        svc: &crate::memory::MemoryService,
-    ) -> (Uuid, Uuid) {
+    async fn seed_memory_with_relation(svc: &crate::memory::MemoryService) -> (Uuid, Uuid) {
         let mem = svc
             .remember(RememberInput {
                 content: "relation test memory",
@@ -325,7 +326,12 @@ mod tests {
             .entity_repo
             .upsert(
                 &svc.database,
-                UpsertEntityInput { name: "Source", r#type: "test", description: None, metadata: None },
+                UpsertEntityInput {
+                    name: "Source",
+                    r#type: "test",
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap()
@@ -334,7 +340,12 @@ mod tests {
             .entity_repo
             .upsert(
                 &svc.database,
-                UpsertEntityInput { name: "Target", r#type: "test", description: None, metadata: None },
+                UpsertEntityInput {
+                    name: "Target",
+                    r#type: "test",
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap()
@@ -374,7 +385,8 @@ mod tests {
 
         assert_eq!(out.affected_memories, 1);
         assert_eq!(out.relations_cleaned, 1);
-        let rels = svc.relation_repo.list_outgoing(&svc.database, src_uuid, None, 100).await.unwrap();
+        let rels =
+            svc.relation_repo.list_outgoing(&svc.database, src_uuid, None, 100).await.unwrap();
         assert!(rels.is_empty(), "relation should have been deleted");
     }
 

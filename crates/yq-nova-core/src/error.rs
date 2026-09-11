@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use serde::Serialize;
@@ -7,7 +6,6 @@ pub type NovaResult<T> = Result<T, NovaError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum ErrorCode {
-
     Validation = 100,
 
     NotFound = 101,
@@ -28,7 +26,6 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::Validation => "validation",
@@ -55,7 +52,6 @@ pub struct NovaError {
 }
 
 impl NovaError {
-
     pub fn validation<M: Into<String>>(msg: M) -> Self {
         Self::new(ErrorCode::Validation, msg.into(), None)
     }
@@ -123,7 +119,12 @@ impl NovaError {
     }
 
     pub fn new(code: ErrorCode, message: String, source: Option<anyhow::Error>) -> Self {
-        Self { code, message, source, trace_id: None }
+        Self {
+            code,
+            message,
+            source,
+            trace_id: None,
+        }
     }
 
     #[inline]

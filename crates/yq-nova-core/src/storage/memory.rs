@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -292,15 +291,14 @@ impl MemoryRepository for SqliteMemoryRepository {
         content: &str,
         content_hash: &str,
     ) -> NovaResult<()> {
-        let res = sqlx::query(
-            "UPDATE memory_items SET content = ?1, content_hash = ?2 WHERE uuid = ?3",
-        )
-        .bind(content)
-        .bind(content_hash)
-        .bind(uuid.to_string())
-        .execute(&db.pool)
-        .await
-        .map_err(NovaError::storage)?;
+        let res =
+            sqlx::query("UPDATE memory_items SET content = ?1, content_hash = ?2 WHERE uuid = ?3")
+                .bind(content)
+                .bind(content_hash)
+                .bind(uuid.to_string())
+                .execute(&db.pool)
+                .await
+                .map_err(NovaError::storage)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("memory {uuid}")));
         }
@@ -408,8 +406,8 @@ impl SqliteMemoryRepository {
         exclude_uuid: Uuid,
     ) -> NovaResult<Option<Uuid>> {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT uuid FROM memory_items \
-             WHERE content_hash = ?1 AND uuid != ?2 AND status != 'deleted'",
+            "SELECT uuid FROM memory_items WHERE content_hash = ?1 AND uuid != ?2 AND status != \
+             'deleted'",
         )
         .bind(content_hash)
         .bind(exclude_uuid.to_string())
@@ -433,9 +431,9 @@ struct BuiltQuery {
 }
 
 fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
-
     let cols_list: &str = "m.id, m.uuid, m.content, m.content_hash, m.metadata_json, m.source, \
-         m.importance, m.access_count, m.last_accessed, m.created_at, m.expires_at, m.status";
+                           m.importance, m.access_count, m.last_accessed, m.created_at, \
+                           m.expires_at, m.status";
 
     let mut joins: String = String::new();
     let mut where_clauses: Vec<String> = Vec::new();
@@ -508,8 +506,8 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
                 binds.push(BindValue::Text(t.clone()));
             }
             joins.push_str(&format!(
-                " INNER JOIN memory_tags mta ON mta.memory_uuid = m.uuid \
-                 INNER JOIN tags ta ON ta.id = mta.tag_id AND ta.name IN ({})",
+                " INNER JOIN memory_tags mta ON mta.memory_uuid = m.uuid INNER JOIN tags ta ON \
+                 ta.id = mta.tag_id AND ta.name IN ({})",
                 qmarks(tags.len())
             ));
             group_by_having =
@@ -523,8 +521,7 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
                 binds.push(BindValue::Text(t.clone()));
             }
             where_clauses.push(format!(
-                "EXISTS (SELECT 1 FROM memory_tags mte \
-                 INNER JOIN tags te ON te.id = mte.tag_id \
+                "EXISTS (SELECT 1 FROM memory_tags mte INNER JOIN tags te ON te.id = mte.tag_id \
                  WHERE mte.memory_uuid = m.uuid AND te.name IN ({}))",
                 qmarks(tags.len())
             ));
@@ -548,7 +545,10 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
         format!("SELECT {cols_list} {from_with_joins} WHERE {wc}")
     };
 
-    BuiltQuery { sql, binds }
+    BuiltQuery {
+        sql,
+        binds,
+    }
 }
 
 pub(crate) fn sha256_hex(s: &str) -> String {
@@ -733,7 +733,13 @@ mod tests {
         let db = temp_db().await;
         let repo = SqliteMemoryRepository::new();
         let uuid = repo
-            .insert(&db, InsertMemoryInput { content: "x", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "x",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();
@@ -756,7 +762,13 @@ mod tests {
         let db = temp_db().await;
         let repo = SqliteMemoryRepository::new();
         let uuid = repo
-            .insert(&db, InsertMemoryInput { content: "x", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "x",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();
@@ -790,15 +802,24 @@ mod tests {
 
         assert_eq!(repo.count(&db, &MemoryFilter::default()).await.unwrap(), 3);
 
-        let f = MemoryFilter { tags_all: Some(vec!["tag-a".into()]), ..Default::default() };
+        let f = MemoryFilter {
+            tags_all: Some(vec!["tag-a".into()]),
+            ..Default::default()
+        };
         assert_eq!(repo.list(&db, &f, 100, 0).await.unwrap().len(), 2);
 
-        let f2 = MemoryFilter { importance_min: Some(0.8), ..Default::default() };
+        let f2 = MemoryFilter {
+            importance_min: Some(0.8),
+            ..Default::default()
+        };
         let hi = repo.list(&db, &f2, 100, 0).await.unwrap();
         assert_eq!(hi.len(), 1);
         assert_eq!(hi[0].content, "b");
 
-        let f3 = MemoryFilter { tags_any: Some(vec!["tag-b".into()]), ..Default::default() };
+        let f3 = MemoryFilter {
+            tags_any: Some(vec!["tag-b".into()]),
+            ..Default::default()
+        };
         assert_eq!(repo.list(&db, &f3, 100, 0).await.unwrap().len(), 1);
 
         let f4 = MemoryFilter {
@@ -812,18 +833,31 @@ mod tests {
     async fn validation_rejects_bad_input() {
         let db = temp_db().await;
         let repo = SqliteMemoryRepository::new();
-        let bad_empty = InsertMemoryInput { content: "", ..Default::default() };
+        let bad_empty = InsertMemoryInput {
+            content: "",
+            ..Default::default()
+        };
         assert_eq!(
             repo.insert(&db, bad_empty).await.unwrap_err().code(),
             crate::error::ErrorCode::Validation
         );
-        let bad_imp = InsertMemoryInput { content: "x", importance: 1.5, ..Default::default() };
+        let bad_imp = InsertMemoryInput {
+            content: "x",
+            importance: 1.5,
+            ..Default::default()
+        };
         assert_eq!(
             repo.insert(&db, bad_imp).await.unwrap_err().code(),
             crate::error::ErrorCode::Validation
         );
         let uuid = repo
-            .insert(&db, InsertMemoryInput { content: "ok", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "ok",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();

@@ -31,9 +31,7 @@ pub async fn update_memory(
     if let Some(content) = &input.content {
         let trimmed = content.trim().to_string();
         if trimmed.is_empty() {
-            return Err(NovaError::validation(
-                "update_memory: content must not be empty",
-            ));
+            return Err(NovaError::validation("update_memory: content must not be empty"));
         }
         if trimmed != record.content {
             content_changed = true;
@@ -62,19 +60,15 @@ pub async fn update_memory(
     if content_changed {
         let content_hash = crate::storage::memory::sha256_hex(&record.content);
 
-        if let Some(conflict_uuid) = svc
-            .memory_repo
-            .check_content_hash_conflict(&svc.database, &content_hash, uuid)
-            .await?
+        if let Some(conflict_uuid) =
+            svc.memory_repo.check_content_hash_conflict(&svc.database, &content_hash, uuid).await?
         {
             return Err(NovaError::conflict(format!(
                 "content_hash conflict with memory {conflict_uuid}"
             )));
         }
 
-        svc.memory_repo
-            .update_content(&svc.database, uuid, &record.content, &content_hash)
-            .await?;
+        svc.memory_repo.update_content(&svc.database, uuid, &record.content, &content_hash).await?;
 
         let meta = svc.embedding.meta();
         let vec = svc.embedding.embed_one(&record.content).await?;
@@ -86,30 +80,22 @@ pub async fn update_memory(
                 meta.provider
             )));
         }
-        svc.vector_store
-            .insert_vector(uuid, &meta.provider, &meta.model, &vec)
-            .await?;
+        svc.vector_store.insert_vector(uuid, &meta.provider, &meta.model, &vec).await?;
 
         record.content_hash = content_hash;
     }
 
     if input.importance.is_some() {
-        svc.memory_repo
-            .update_importance(&svc.database, uuid, record.importance)
-            .await?;
+        svc.memory_repo.update_importance(&svc.database, uuid, record.importance).await?;
     }
 
     if input.metadata.is_some() {
-        svc.memory_repo
-            .update_metadata(&svc.database, uuid, &record.metadata)
-            .await?;
+        svc.memory_repo.update_metadata(&svc.database, uuid, &record.metadata).await?;
     }
 
     if input.expires_at.is_some() {
         let expires_ts = record.expires_at.map(|t| t.timestamp());
-        svc.memory_repo
-            .update_expires_at(&svc.database, uuid, expires_ts)
-            .await?;
+        svc.memory_repo.update_expires_at(&svc.database, uuid, expires_ts).await?;
     }
 
     if let Some(new_tags) = &input.tags {
@@ -130,10 +116,12 @@ pub async fn update_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::memory::ops_remember::{RememberInput, service_for_tests};
-    use crate::storage::Database;
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        memory::ops_remember::{RememberInput, service_for_tests},
+        storage::Database,
+    };
 
     async fn temp_svc() -> MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-update-{}", Uuid::new_v4()));

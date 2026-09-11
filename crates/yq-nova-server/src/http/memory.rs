@@ -1,4 +1,3 @@
-
 use axum::{
     Json,
     extract::{Path, State},
@@ -159,7 +158,7 @@ pub async fn delete_memory(
     let svc: &MemoryService = &state.memory;
     let input = ForgetInput {
         target: ForgetTarget::One(uuid),
-        mode: ForgetMode::Hard, 
+        mode: ForgetMode::Hard,
         gc_graph: false,
         batch_limit: 1,
     };
@@ -245,8 +244,6 @@ pub async fn import_memories(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::http::graph::UpsertEntityResponse;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -260,6 +257,9 @@ mod tests {
         storage::{Database, Migrator},
     };
 
+    use super::*;
+    use crate::http::graph::UpsertEntityResponse;
+
     async fn make_router() -> (AppState, axum::Router) {
         let dir = std::env::temp_dir().join(format!(
             "yq-nova-test-api-{}-{}",
@@ -268,7 +268,10 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let db_path = dir.join("nova.sqlite");
-        let storage_cfg = StorageConfig { db_path, ..Default::default() };
+        let storage_cfg = StorageConfig {
+            db_path,
+            ..Default::default()
+        };
         let db = Database::open(storage_cfg.clone()).await.expect("open db");
         Migrator::run(&db.pool).await.expect("migrations");
 

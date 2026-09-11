@@ -1,4 +1,3 @@
-
 use std::{path::Path, sync::Arc};
 
 use async_trait::async_trait;
@@ -22,14 +21,12 @@ pub mod vector_vec;
 
 #[derive(Clone)]
 pub struct Database {
-
     pub pool: SqlitePool,
 
     pub config: Arc<StorageConfig>,
 }
 
 impl Database {
-
     pub async fn open(config: StorageConfig) -> NovaResult<Self> {
         Self::ensure_parent_dir(&config.db_path)?;
 
@@ -60,20 +57,13 @@ impl Database {
             sync_lit,
             config.busy_timeout_ms,
             config.cache_size_kb,
-
             match config.page_size.max(4096).saturating_div(1024).max(1) {
                 kb_per_page if config.wal_autocheckpoint_kb > 0 => {
                     config.wal_autocheckpoint_kb.saturating_div(kb_per_page).max(1)
                 },
                 _ => 0,
             },
-
-            if config.journal_size_limit_kb > 0 {
-                config.journal_size_limit_kb * 1024
-            } else {
-
-                -1
-            },
+            if config.journal_size_limit_kb > 0 { config.journal_size_limit_kb * 1024 } else { -1 },
             if config.mmap_size_kb > 0 { config.mmap_size_kb * 1024 } else { 0 },
             if config.soft_heap_limit_kb > 0 { config.soft_heap_limit_kb * 1024 } else { 0 },
         ))
@@ -90,7 +80,10 @@ impl Database {
 
         migration::Migrator::run(&pool).await?;
 
-        Ok(Self { pool, config: Arc::new(config) })
+        Ok(Self {
+            pool,
+            config: Arc::new(config),
+        })
     }
 
     pub async fn begin(&self) -> NovaResult<Transaction<'_, Sqlite>> {
@@ -98,7 +91,6 @@ impl Database {
     }
 
     pub async fn close(self) -> NovaResult<()> {
-
         let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE);").execute(&self.pool).await;
         self.pool.close().await;
         Ok(())
@@ -135,7 +127,6 @@ fn synchronous_pragma_value(s: &str) -> String {
         "full" | "2" => "2".into(),
         "extra" | "3" => "3".into(),
         other => {
-
             tracing::warn!(value = other, "unexpected storage.synchronous; falling back to NORMAL");
             "1".into()
         },
@@ -145,7 +136,6 @@ fn synchronous_pragma_value(s: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryStatus {
-
     Active,
 
     Archived,
@@ -189,7 +179,6 @@ impl TryFrom<&str> for MemoryStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
-
     #[default]
     Agent,
 
@@ -233,13 +222,11 @@ impl TryFrom<&str> for MemorySource {
 
 #[async_trait]
 pub trait Repository<T>: Send + Sync {
-
     fn name(&self) -> &'static str;
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryFilter {
-
     pub source_in: Option<Vec<MemorySource>>,
 
     pub created_after: Option<chrono::DateTime<chrono::Utc>>,

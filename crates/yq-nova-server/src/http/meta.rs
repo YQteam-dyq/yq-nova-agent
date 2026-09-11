@@ -1,4 +1,3 @@
-
 use axum::{Json, extract::State};
 use chrono::Utc;
 use serde::Serialize;
@@ -40,7 +39,6 @@ pub struct StatsOut {
 }
 
 async fn db_size_bytes(db: &yq_nova_core::storage::Database) -> Option<i64> {
-
     let sql_page_size: std::result::Result<i64, sqlx::Error> =
         sqlx::query_scalar::<_, i64>("PRAGMA page_size").fetch_one(&db.pool).await;
     let sql_page_count: std::result::Result<i64, sqlx::Error> =
@@ -60,14 +58,20 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<StatsOut>> {
     let active_count = mem_repo
         .count(
             db,
-            &MemoryFilter { status_in: Some(vec![MemoryStatus::Active]), ..Default::default() },
+            &MemoryFilter {
+                status_in: Some(vec![MemoryStatus::Active]),
+                ..Default::default()
+            },
         )
         .await?;
 
     let archived_count = mem_repo
         .count(
             db,
-            &MemoryFilter { status_in: Some(vec![MemoryStatus::Archived]), ..Default::default() },
+            &MemoryFilter {
+                status_in: Some(vec![MemoryStatus::Archived]),
+                ..Default::default()
+            },
         )
         .await?;
 
@@ -86,7 +90,7 @@ pub async fn stats(State(state): State<AppState>) -> Result<Json<StatsOut>> {
         .await
         .map_err(|e| AppError::from(yq_nova_core::error::NovaError::storage(e)))?;
 
-    let _ = (tag_repo, entity_repo); 
+    let _ = (tag_repo, entity_repo);
 
     let total_count = mem_repo.count(db, &MemoryFilter::default()).await?;
 

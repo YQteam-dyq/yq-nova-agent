@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 use crate::storage::memory::MemoryRecord;
@@ -15,7 +14,12 @@ pub struct RankWeights {
 
 impl Default for RankWeights {
     fn default() -> Self {
-        Self { similarity: 0.6, importance: 0.15, access: 0.1, graph_boost: 0.15 }
+        Self {
+            similarity: 0.6,
+            importance: 0.15,
+            access: 0.1,
+            graph_boost: 0.15,
+        }
     }
 }
 
@@ -58,11 +62,15 @@ fn normalise_weights(w: RankWeights) -> RankWeights {
     imp /= total;
     acc /= total;
     gb /= total;
-    RankWeights { similarity: sim, importance: imp, access: acc, graph_boost: gb }
+    RankWeights {
+        similarity: sim,
+        importance: imp,
+        access: acc,
+        graph_boost: gb,
+    }
 }
 
 fn map_cosine_to_unit(raw: Option<f32>) -> f32 {
-
     match raw {
         None => 0.0,
         Some(v) if v <= -1.0 => 0.0,
@@ -72,7 +80,6 @@ fn map_cosine_to_unit(raw: Option<f32>) -> f32 {
 }
 
 fn access_signal(mem: &MemoryRecord) -> f32 {
-
     let n = mem.access_count.max(0) as f32;
     let capped = n.min(50.0);
     (capped / 50.0).sqrt()
@@ -106,7 +113,11 @@ pub fn rank<'a>(
                 + components.graph_boost)
                 .clamp(0.0, 1.0);
 
-            RankedHit { memory: c.memory, final_score, components }
+            RankedHit {
+                memory: c.memory,
+                final_score,
+                components,
+            }
         })
         .filter(|h| h.final_score >= threshold)
         .collect();
@@ -115,7 +126,6 @@ pub fn rank<'a>(
         b.final_score
             .partial_cmp(&a.final_score)
             .unwrap_or(std::cmp::Ordering::Equal)
-
             .then_with(|| b.memory.created_at.cmp(&a.memory.created_at))
     });
     hits
@@ -126,7 +136,6 @@ use std::collections::HashMap;
 use crate::Uuid;
 
 pub struct RrfSource {
-
     pub items: Vec<Uuid>,
 
     pub weight: f32,
@@ -178,7 +187,11 @@ pub fn reciprocal_rank_fusion(sources: Vec<RrfSource>, smoothing_k: Option<u32>)
 
     let mut out: Vec<RrfHit> = accum
         .into_iter()
-        .map(|(uuid, (score, from_sources))| RrfHit { uuid, score, from_sources })
+        .map(|(uuid, (score, from_sources))| RrfHit {
+            uuid,
+            score,
+            from_sources,
+        })
         .collect();
     out.sort_by(|a, b| {
         b.score
@@ -209,7 +222,11 @@ mod tests_rrf {
 
     #[test]
     fn rrf_one_source_preserves_order() {
-        let src = vec![RrfSource { items: vec![u(1), u(2), u(3)], weight: 1.0, label: "s" }];
+        let src = vec![RrfSource {
+            items: vec![u(1), u(2), u(3)],
+            weight: 1.0,
+            label: "s",
+        }];
         let out = reciprocal_rank_fusion(src, None);
         let order: Vec<u8> = out.iter().map(|h| h.uuid.as_fields().0 as u8).collect();
         assert_eq!(order, vec![1, 2, 3]);
@@ -217,13 +234,20 @@ mod tests_rrf {
 
     #[test]
     fn rrf_fusion_prefers_items_in_multiple_sources() {
-
         let a = u(1);
         let b = u(2);
         let c = u(3);
         let sources = vec![
-            RrfSource { items: vec![a, b], weight: 1.0, label: "s1" },
-            RrfSource { items: vec![a, c], weight: 1.0, label: "s2" },
+            RrfSource {
+                items: vec![a, b],
+                weight: 1.0,
+                label: "s1",
+            },
+            RrfSource {
+                items: vec![a, c],
+                weight: 1.0,
+                label: "s2",
+            },
         ];
         let out = reciprocal_rank_fusion(sources, None);
         assert_eq!(out[0].uuid, a);
@@ -238,8 +262,16 @@ mod tests_rrf {
         let a = u(1);
         let b = u(2);
         let sources = vec![
-            RrfSource { items: vec![a], weight: 0.0, label: "a" },
-            RrfSource { items: vec![b], weight: 0.0, label: "b" },
+            RrfSource {
+                items: vec![a],
+                weight: 0.0,
+                label: "a",
+            },
+            RrfSource {
+                items: vec![b],
+                weight: 0.0,
+                label: "b",
+            },
         ];
         let out = reciprocal_rank_fusion(sources, None);
         assert_eq!(out.len(), 2);
@@ -249,10 +281,11 @@ mod tests_rrf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::{MemorySource, MemoryStatus};
     use chrono::Utc;
     use uuid::Uuid;
+
+    use super::*;
+    use crate::storage::{MemorySource, MemoryStatus};
 
     fn mk_mem(access_count: i64, importance: f32) -> MemoryRecord {
         MemoryRecord {
@@ -313,8 +346,16 @@ mod tests {
         let hi = mk_mem(0, 0.9);
         let lo = mk_mem(0, 0.2);
         let cands = vec![
-            RankCandidate { memory: &lo, raw_similarity: Some(0.2), from_graph: false },
-            RankCandidate { memory: &hi, raw_similarity: Some(0.9), from_graph: false },
+            RankCandidate {
+                memory: &lo,
+                raw_similarity: Some(0.2),
+                from_graph: false,
+            },
+            RankCandidate {
+                memory: &hi,
+                raw_similarity: Some(0.9),
+                from_graph: false,
+            },
         ];
         let hits = rank(cands, RankWeights::default(), 0.0);
         assert_eq!(hits.len(), 2);
@@ -322,8 +363,16 @@ mod tests {
         assert_eq!(hits[0].memory.uuid, hi.uuid);
 
         let cands2 = vec![
-            RankCandidate { memory: &lo, raw_similarity: Some(0.2), from_graph: false },
-            RankCandidate { memory: &hi, raw_similarity: Some(0.9), from_graph: false },
+            RankCandidate {
+                memory: &lo,
+                raw_similarity: Some(0.2),
+                from_graph: false,
+            },
+            RankCandidate {
+                memory: &hi,
+                raw_similarity: Some(0.9),
+                from_graph: false,
+            },
         ];
         let hits = rank(cands2, RankWeights::default(), 0.8);
         assert!(hits.iter().all(|h| h.final_score >= 0.8));
@@ -331,13 +380,20 @@ mod tests {
 
     #[test]
     fn graph_boost_pulls_in_graph_only_rows() {
-
         let graph_mem = mk_mem(0, 1.0);
         let direct_mem = mk_mem(0, 0.0);
 
         let cands = vec![
-            RankCandidate { memory: &direct_mem, raw_similarity: Some(-0.6), from_graph: false },
-            RankCandidate { memory: &graph_mem, raw_similarity: None, from_graph: true },
+            RankCandidate {
+                memory: &direct_mem,
+                raw_similarity: Some(-0.6),
+                from_graph: false,
+            },
+            RankCandidate {
+                memory: &graph_mem,
+                raw_similarity: None,
+                from_graph: true,
+            },
         ];
         let hits = rank(cands, RankWeights::default(), 0.0);
         assert_eq!(
