@@ -158,7 +158,7 @@ yq-nova stats
                │
 ┌──────────────▼──────────────────────────────────┐
 │              yq-nova-server                      │
-│  axum HTTP · DTO validation · middleware st## CIThis repository uses GitHub Actions for CI. See [ci.yml](.github/workflows/ci.yml).ack   │
+│  axum HTTP · DTO validation · middleware st## CIThis repository uses GitHub Actions for CI. See [ci.yml](.github/workflows/ci.yml).ac> Status: CI badge placeholderk   │
 └──────────────┬──────────────────────────────────┘
                │
 ┌──────────────▼──────────────────────────────────┐
