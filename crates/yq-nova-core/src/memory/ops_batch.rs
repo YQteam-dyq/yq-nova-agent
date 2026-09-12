@@ -128,15 +128,27 @@ pub async fn remember_batch(
             },
             Err(e) => {
                 failed += 1;
+                let message = e.to_string();
                 results.push(BatchRememberResult {
                     index,
                     uuid: None,
                     duplicate: false,
                     embedding_stored: false,
                     tags: Vec::new(),
-                    error: Some(e.to_string()),
+                    error: Some(message.clone()),
                 });
                 if !input.continue_on_error {
+                    for skipped_index in (index + 1)..received {
+                        failed += 1;
+                        results.push(BatchRememberResult {
+                            index: skipped_index,
+                            uuid: None,
+                            duplicate: false,
+                            embedding_stored: false,
+                            tags: Vec::new(),
+                            error: Some(format!("skipped after earlier failure: {message}")),
+                        });
+                    }
                     break;
                 }
             },
@@ -239,7 +251,11 @@ mod tests {
     #[tokio::test]
     async fn batch_stops_on_first_error_when_configured() {
         let svc = temp_svc().await;
-        let items = vec![item("valid entry", 0.5, "ok"), item("   ", 0.5, "bad")];
+        let items = vec![
+            item("   ", 0.5, "bad"),
+            item("valid entry one", 0.5, "ok"),
+            item("valid entry two", 0.5, "ok"),
+        ];
 
         let strict = remember_batch(
             &svc,
@@ -250,10 +266,20 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(strict.succeeded, 1);
-        assert_eq!(strict.failed, 1);
-        assert_eq!(strict.results.len(), 2);
-        assert!(strict.results[1].error.is_some());
+        assert_eq!(strict.received, 3);
+        assert_eq!(strict.succeeded, 0);
+        assert_eq!(strict.duplicates, 0);
+        assert_eq!(strict.failed, 3);
+        assert_eq!(strict.results.len(), 3);
+        assert_eq!(strict.succeeded + strict.duplicates + strict.failed, strict.received);
+
+        let mut seen = vec![false; strict.received];
+        for result in &strict.results {
+            assert!(result.index < strict.received);
+            seen[result.index] = true;
+            assert!(result.error.is_some());
+        }
+        assert!(seen.into_iter().all(|hit| hit), "every index must appear exactly once");
 
         let lenient = remember_batch(
             &svc,
@@ -265,7 +291,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(lenient.failed, 1);
-        assert_eq!(lenient.results.len(), 2);
+        assert_eq!(lenient.results.len(), 3);
+        assert_eq!(lenient.succeeded + lenient.duplicates + lenient.failed, lenient.received);
     }
 
     #[tokio::test]
