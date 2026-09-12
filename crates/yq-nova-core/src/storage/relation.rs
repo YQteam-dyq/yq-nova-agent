@@ -102,6 +102,7 @@ pub trait RelationRepository: Repository<RelationRecord> {
         limit: usize,
     ) -> NovaResult<Vec<RelationRecord>>;
 
+    #[allow(clippy::too_many_arguments)]
     async fn bfs_traverse(
         &self,
         db: &Database,
