@@ -143,6 +143,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn remember_one(
     svc: &MemoryService,
     content: &str,
