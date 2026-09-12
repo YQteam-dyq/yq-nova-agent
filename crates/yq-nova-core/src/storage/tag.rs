@@ -190,23 +190,17 @@ impl TagRepository for SqliteTagRepository {
         if target == name {
             return Ok(());
         }
-        let taken: Option<(i64,)> = sqlx::query_as("SELECT id FROM tags WHERE name = ?1")
-            .bind(target)
-            .fetch_optional(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
-        if taken.is_some() {
-            return Err(NovaError::conflict(format!("tag already exists: {target}")));
-        }
+        let mut tx = db.begin().await?;
         let res = sqlx::query("UPDATE tags SET name = ?1 WHERE name = ?2")
             .bind(target)
             .bind(name)
-            .execute(&db.pool)
+            .execute(&mut *tx)
             .await
-            .map_err(NovaError::storage)?;
+            .map_err(NovaError::from)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("tag {name}")));
         }
+        tx.commit().await.map_err(NovaError::from)?;
         Ok(())
     }
 
