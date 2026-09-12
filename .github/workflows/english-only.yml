@@ -1,0 +1,164 @@
+name: English Only
+
+# Repository language policy for pull requests.
+#
+#   1. Pull request titles and descriptions must be written in English.
+#   2. Every added source line must be written in English, including code
+#      comments (line, block and doc comments) and log messages.
+#
+# Localized resources are allowed only under the paths listed in ALLOWED_PATHS
+# in the "Check added lines" step below.
+#
+# Escape hatch: add the label "english-check-bypass" to a pull request to skip
+# the policy checks while the job still reports success.
+#
+# The job name "English Only" is used as the required status check name.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: english-only-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  english-only:
+    name: English Only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check pull request title and description
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'english-check-bypass')
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          NON_ENGLISH = re.compile("[\u2e80-\u2eff\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]")
+
+
+          def offenders(text):
+              seen = []
+              for char in text:
+                  if NON_ENGLISH.match(char) and char not in seen:
+                      seen.append(char)
+              return seen
+
+
+          problems = []
+          title = os.environ.get("PR_TITLE") or ""
+          body = os.environ.get("PR_BODY") or ""
+
+          bad_title = offenders(title)
+          if bad_title:
+              problems.append("The pull request title must be English only, non-English characters found: " + " ".join(bad_title[:30]))
+
+          bad_body = offenders(body)
+          if bad_body:
+              problems.append("The pull request description must be English only, non-English characters found: " + " ".join(bad_body[:30]))
+
+          for problem in problems:
+              print("::error::" + problem)
+
+          if problems:
+              print("::error::Rewrite the pull request title and description in English, then push an update.")
+              sys.exit(1)
+
+          print("English only check passed for the pull request title and description.")
+          PY
+
+      - name: Check added lines in the pull request diff
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'english-check-bypass')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" > "${RUNNER_TEMP}/pr.diff"
+
+          if [ ! -s "${RUNNER_TEMP}/pr.diff" ]; then
+            echo "::error::Unable to read the pull request diff, refusing to pass silently."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          NON_ENGLISH = re.compile("[\u2e80-\u2eff\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]")
+
+          ALLOWED_PATHS = (
+              "/i18n/",
+              "/locale/",
+              "/locales/",
+              "/lang/",
+              "/translations/",
+          )
+          ALLOWED_SUFFIXES = (
+              ".po",
+              ".pot",
+              ".ftl",
+              ".arb",
+              ".resx",
+              ".properties",
+          )
+          COMMENT_PREFIX = re.compile(r"^\s*(//|/\*|\*|#|<!--|--|;|'''|\"\"\")")
+          LOG_CALL = re.compile(r"(?i)(println!|print!|eprintln!|eprint!|writeln!|dbg!|panic!|debug!|info!|warn!|error!|trace!|log::|tracing::|console\.(log|warn|error|info|debug|trace)|System\.(out|err)|fmt\.Print|log\.(Print|Printf|Println|Fatal|Fatalf)|logger\.|logging\.|NSLog|qDebug|Timber\.|Log\.[A-Za-z]|puts\b|echo\b|std::(cout|cerr)|print\(|alert\()")
+
+          diff_path = os.path.join(os.environ.get("RUNNER_TEMP") or "/tmp", "pr.diff")
+          failures = []
+          current_file = ""
+
+          with open(diff_path, "r", encoding="utf-8", errors="replace") as handle:
+              for raw_line in handle:
+                  line = raw_line.rstrip("\n")
+                  if line.startswith("+++ "):
+                      current_file = line[6:] if line.startswith("+++ b/") else line[4:]
+                      continue
+                  if not line.startswith("+") or line.startswith("+++"):
+                      continue
+                  content = line[1:].strip()
+                  if not content or not NON_ENGLISH.search(content):
+                      continue
+                  lowered = current_file.lower()
+                  if lowered.endswith(ALLOWED_SUFFIXES) or any(part in "/" + lowered for part in ALLOWED_PATHS):
+                      continue
+                  if COMMENT_PREFIX.match(line[1:]):
+                      kind = "comment"
+                  elif LOG_CALL.search(line[1:]):
+                      kind = "log message"
+                  else:
+                      kind = "source line"
+                  failures.append((current_file, kind, content))
+
+          for path, kind, content in failures[:40]:
+              print("::error::file={0} type={1} text={2}".format(path, kind, content[:160]))
+
+          if len(failures) > 40:
+              print("::error::and {0} more line(s).".format(len(failures) - 40))
+
+          if failures:
+              print("::error::All added lines must be English only, including comments and log messages.")
+              sys.exit(1)
+
+          print("English only check passed for all added lines.")
+          PY
+
+      - name: Register the check on manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "The English Only policy check is registered for this repository."
