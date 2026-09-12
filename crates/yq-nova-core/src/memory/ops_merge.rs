@@ -107,10 +107,9 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
 
     let merged_uuids_strs: Vec<String> = merged.iter().map(|u| u.to_string()).collect();
     let placeholders: Vec<String> =
-        (0..merged_uuids_strs.len()).map(|i| format!("?{}", i + 1)).collect();
+        (0..merged_uuids_strs.len()).map(|i| format!("?{}", i + 2)).collect();
     let sql = format!(
-        "UPDATE relations SET memory_uuid = ?{} WHERE memory_uuid IN ({})",
-        merged_uuids_strs.len() + 1,
+        "UPDATE relations SET memory_uuid = ?1 WHERE memory_uuid IN ({})",
         placeholders.join(","),
     );
 
@@ -171,6 +170,24 @@ mod tests {
             })
             .await
             .unwrap();
+
+        // `created_at` has second precision (`Utc::now().timestamp()`), so two
+        // records created within the same second tie and the
+        // implementation then falls back to `importance`. Space the
+        // timestamps out explicitly so this case only exercises
+        // the "keep the earliest created_at" rule.
+        let base_ts: i64 = sqlx::query_scalar("SELECT MIN(created_at) FROM memory_items")
+            .fetch_one(&svc.database.pool)
+            .await
+            .unwrap();
+        for (uuid, offset) in [(a.uuid, 0_i64), (b.uuid, 60_i64)] {
+            sqlx::query("UPDATE memory_items SET created_at = ?1 WHERE uuid = ?2")
+                .bind(base_ts + offset)
+                .bind(uuid.to_string())
+                .execute(&svc.database.pool)
+                .await
+                .unwrap();
+        }
 
         let out = svc
             .merge(MergeInput {
