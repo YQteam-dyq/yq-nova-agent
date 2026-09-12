@@ -10,6 +10,9 @@ use yq_nova_core::{
     memory::{
         ChunkOptions, ForgetInput, ForgetOutput, GraphTraversalOpts, HybridWeights, RankWeights,
         RecallOutput, RememberOutput, SearchMode,
+        ops_batch::{BatchRememberInput, BatchRememberOutput},
+        ops_list::{ListInput, ListOutput},
+        ops_tag::{TagDeleteOutput, TagListOutput, TagRenameOutput},
     },
     storage::{
         EntityRecord, MemoryFilter, MemoryRecord, MemorySource, RelationRecord, TraverseNode,
@@ -540,6 +543,37 @@ impl HttpClient {
         req: ImportMemoriesRequest,
     ) -> NovaResult<ImportMemoriesResponse> {
         self.post_json("/v1/memory/import", &req).await
+    }
+
+    pub async fn list_memories(&self, req: ListInput) -> NovaResult<ListOutput> {
+        self.post_json("/v1/memory/list", &req).await
+    }
+
+    pub async fn remember_batch(
+        &self,
+        req: BatchRememberInput,
+    ) -> NovaResult<BatchRememberOutput> {
+        self.post_json("/v1/memory/remember-batch", &req).await
+    }
+
+    pub async fn list_tags(&self, limit: usize, offset: usize) -> NovaResult<TagListOutput> {
+        self.get_json(&format!("/v1/tags?limit={limit}&offset={offset}")).await
+    }
+
+    pub async fn rename_tag(&self, name: &str, new_name: &str) -> NovaResult<TagRenameOutput> {
+        if name.trim().is_empty() {
+            return Err(NovaError::validation("rename_tag: name must not be empty"));
+        }
+        let path = format!("/v1/tags/{}", urlencoding(name));
+        let body = serde_json::json!({ "new_name": new_name });
+        self.patch_json(&path, &body).await
+    }
+
+    pub async fn delete_tag(&self, name: &str) -> NovaResult<TagDeleteOutput> {
+        if name.trim().is_empty() {
+            return Err(NovaError::validation("delete_tag: name must not be empty"));
+        }
+        self.delete_json(&format!("/v1/tags/{}", urlencoding(name))).await
     }
 
     pub async fn merge_entities(

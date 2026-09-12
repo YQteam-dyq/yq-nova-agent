@@ -144,7 +144,91 @@ yq-nova remember "Your content here" --tag rust --importance 0.9
 yq-nova recall "query text" --top-k 10 --mode hybrid --graph
 yq-nova forget --uuid <uuid>
 yq-nova stats
+
+# Browse memories with filters, pagination and sorting
+yq-nova list --limit 20 --sort importance_desc --tag rust
+yq-nova list --status active,archived --importance-min 0.5 --json
+
+# Inspect tags and how many memories carry each one
+yq-nova tags --limit 50 --json
 ```
+
+---
+
+## List, Batch Ingest and Tag Management
+
+### HTTP API
+
+```bash
+# List memories with filters, pagination and sorting
+curl -X POST http://127.0.0.1:7999/v1/memory/list \
+  -H 'Content-Type: application/json' \
+  -d '{"filter": {"tags_all": ["nova"], "importance_min": 0.5}, "limit": 20, "offset": 0, "sort": "importance_desc"}'
+
+# Ingest up to 200 memories in a single round trip
+curl -X POST http://127.0.0.1:7999/v1/memory/remember-batch \
+  -H 'Content-Type: application/json' \
+  -d '{"items": [{"content": "first", "tags": ["batch"]}, {"content": "second", "tags": ["batch"]}], "continue_on_error": true}'
+
+# Inspect tags together with their memory counts
+curl 'http://127.0.0.1:7999/v1/tags?limit=100&offset=0'
+
+# Rename a tag while every memory association stays intact
+curl -X PATCH http://127.0.0.1:7999/v1/tags/nova \
+  -H 'Content-Type: application/json' \
+  -d '{"new_name": "yq-nova"}'
+
+# Delete a tag: memories are kept, the association is dropped
+curl -X DELETE http://127.0.0.1:7999/v1/tags/yq-nova
+```
+
+`POST /v1/memory/list` accepts `sort` values of `created_desc`, `created_asc`, `importance_desc`, `importance_asc` and `accessed_desc`. It returns `total` alongside the current page, so a client can paginate without issuing a second count request. `POST /v1/memory/remember-batch` reports one result per item: each entry carries its `index`, the resulting `uuid`, whether it was a `duplicate`, and an `error` string when the item was rejected.
+
+### Rust SDK
+
+```rust
+use yq_nova_sdk::{EmbeddedNova, ListInput, MemorySortOrder, MemoryFilter};
+
+# async fn demo(nova: &EmbeddedNova) -> yq_nova_sdk::NovaResult<()> {
+let page = nova
+    .list_memories(ListInput {
+        filter: MemoryFilter {
+            tags_all: Some(vec!["nova".into()]),
+            ..Default::default()
+        },
+        limit: 20,
+        offset: 0,
+        sort: MemorySortOrder::ImportanceDesc,
+    })
+    .await?;
+println!("total={} count={}", page.total, page.count);
+
+let tags = nova.list_tags(100, 0).await?;
+for tag in tags.items {
+    println!("{} -> {}", tag.name, tag.memory_count);
+}
+# Ok(())
+# }
+```
+
+The same methods exist on the HTTP client, plus `remember_batch`, `rename_tag` and `delete_tag`.
+
+### Python client
+
+```python
+from yq_nova import Client
+
+client = Client("http://127.0.0.1:7999")
+page = client.list_memories(filter={"tags_all": ["nova"]}, limit=20, sort="importance_desc")
+client.remember_batch([{"content": "first"}, {"content": "second"}])
+client.list_tags(limit=100)
+client.rename_tag("nova", "yq-nova")
+client.delete_tag("yq-nova")
+```
+
+### MCP tools
+
+The MCP server exposes two additional tools: `nova_list` lists memories with tag, status, pagination and sorting options, and `nova_tags` lists tags together with their memory counts.
 
 ---
 

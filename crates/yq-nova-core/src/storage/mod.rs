@@ -220,6 +220,75 @@ impl TryFrom<&str> for MemorySource {
     }
 }
 
+pub fn parse_statuses(raw: &str) -> NovaResult<Vec<MemoryStatus>> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let name = part.trim();
+        if name.is_empty() {
+            continue;
+        }
+        out.push(MemoryStatus::try_from(name)?);
+    }
+    if out.is_empty() {
+        return Err(NovaError::validation("memory.status list must not be empty"));
+    }
+    Ok(out)
+}
+
+pub fn parse_sources(raw: &str) -> NovaResult<Vec<MemorySource>> {
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let name = part.trim();
+        if name.is_empty() {
+            continue;
+        }
+        out.push(MemorySource::try_from(name)?);
+    }
+    if out.is_empty() {
+        return Err(NovaError::validation("memory.source list must not be empty"));
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySortOrder {
+    #[default]
+    CreatedDesc,
+
+    CreatedAsc,
+
+    ImportanceDesc,
+
+    ImportanceAsc,
+
+    AccessedDesc,
+}
+
+impl MemorySortOrder {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MemorySortOrder::CreatedDesc => "created_desc",
+            MemorySortOrder::CreatedAsc => "created_asc",
+            MemorySortOrder::ImportanceDesc => "importance_desc",
+            MemorySortOrder::ImportanceAsc => "importance_asc",
+            MemorySortOrder::AccessedDesc => "accessed_desc",
+        }
+    }
+
+    pub(crate) fn order_by_sql(&self) -> &'static str {
+        match self {
+            MemorySortOrder::CreatedDesc => "m.created_at DESC, m.id DESC",
+            MemorySortOrder::CreatedAsc => "m.created_at ASC, m.id ASC",
+            MemorySortOrder::ImportanceDesc => "m.importance DESC, m.created_at DESC, m.id DESC",
+            MemorySortOrder::ImportanceAsc => "m.importance ASC, m.created_at DESC, m.id DESC",
+            MemorySortOrder::AccessedDesc => {
+                "COALESCE(m.last_accessed, 0) DESC, m.created_at DESC, m.id DESC"
+            },
+        }
+    }
+}
+
 #[async_trait]
 pub trait Repository<T>: Send + Sync {
     fn name(&self) -> &'static str;

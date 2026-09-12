@@ -8,9 +8,11 @@ use uuid::Uuid;
 use yq_nova_core::{
     memory::{
         ChunkOptions, MemoryService,
+        ops_batch::{BatchRememberInput, BatchRememberOutput},
         ops_export::ExportInput,
         ops_forget::ForgetInput,
         ops_import::ImportInput,
+        ops_list::{ListInput, ListOutput},
         ops_merge::{MergeInput, MergeOutput},
         ops_recall::{RecallInput, RecallOutput},
         ops_remember::{RememberInput, RememberOutput},
@@ -108,6 +110,15 @@ pub async fn remember(
     Ok(Json(out))
 }
 
+pub async fn remember_batch(
+    State(state): State<AppState>,
+    Json(req): Json<BatchRememberInput>,
+) -> Result<Json<BatchRememberOutput>> {
+    let svc: &MemoryService = &state.memory;
+    let out = svc.remember_batch(req).await?;
+    Ok(Json(out))
+}
+
 pub async fn recall(
     State(state): State<AppState>,
     Json(req): Json<RecallRequest>,
@@ -128,6 +139,15 @@ pub async fn recall(
         entity_focus: req.entity_focus,
     };
     let out: RecallOutput = svc.recall(input).await?;
+    Ok(Json(out))
+}
+
+pub async fn list_memories(
+    State(state): State<AppState>,
+    Json(req): Json<ListInput>,
+) -> Result<Json<ListOutput>> {
+    let svc: &MemoryService = &state.memory;
+    let out = svc.list_memories(req).await?;
     Ok(Json(out))
 }
 
@@ -642,5 +662,118 @@ mod tests {
             out.hits.iter().any(|h| h.from_graph),
             "at least one result should be marked from_graph"
         );
+    }
+
+    async fn list_req(router: &axum::Router, body: serde_json::Value) -> ListOutput {
+        let req = Request::builder()
+            .uri("/v1/memory/list")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "memory list should return 200");
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice::<ListOutput>(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn list_endpoint_filters_by_tag_and_reports_total() {
+        let (_state, router) = make_router().await;
+        remember(&router, "list alpha entry", &["listtag"]).await;
+        remember(&router, "list beta entry", &["listtag"]).await;
+        remember(&router, "list gamma entry", &["other"]).await;
+
+        let out = list_req(
+            &router,
+            serde_json::json!({
+                "filter": {"tags_all": ["listtag"]},
+                "limit": 10,
+                "offset": 0,
+            }),
+        )
+        .await;
+        assert_eq!(out.total, 2);
+        assert_eq!(out.count, 2);
+        assert_eq!(out.limit, 10);
+        assert!(out.items.iter().all(|m| m.tags.contains(&"listtag".to_string())));
+    }
+
+    #[tokio::test]
+    async fn list_endpoint_sorts_by_importance_descending() {
+        let (_state, router) = make_router().await;
+        for (content, imp) in [("rank low", 0.1), ("rank high", 0.9), ("rank mid", 0.5)] {
+            let body = serde_json::json!({
+                "content": content,
+                "importance": imp,
+                "embed": true,
+                "extract_graph": false,
+            });
+            let req = Request::builder()
+                .uri("/v1/memory/remember")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            router.clone().oneshot(req).await.unwrap();
+        }
+
+        let out = list_req(
+            &router,
+            serde_json::json!({"sort": "importance_desc", "limit": 10}),
+        )
+        .await;
+        let contents: Vec<String> = out.items.iter().map(|m| m.content.clone()).collect();
+        assert_eq!(contents, vec!["rank high", "rank mid", "rank low"]);
+    }
+
+    #[tokio::test]
+    async fn list_endpoint_rejects_out_of_range_limit() {
+        let (_state, router) = make_router().await;
+        let body = serde_json::json!({"limit": 100000});
+        let req = Request::builder()
+            .uri("/v1/memory/list")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_endpoint_reports_per_item_results() {
+        let (_state, router) = make_router().await;
+        let body = serde_json::json!({
+            "items": [
+                {"content": "batch alpha entry", "importance": 0.4, "tags": ["batchtag"]},
+                {"content": "batch beta entry", "importance": 0.6, "tags": ["batchtag"]},
+                {"content": "   "},
+            ],
+            "continue_on_error": true,
+        });
+        let req = Request::builder()
+            .uri("/v1/memory/remember-batch")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let out: BatchRememberOutput = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(out.received, 3);
+        assert_eq!(out.succeeded, 2);
+        assert_eq!(out.failed, 1);
+        assert!(out.results[0].uuid.is_some());
+        assert!(out.results[2].error.is_some());
+
+        let listed = list_req(
+            &router,
+            serde_json::json!({"filter": {"tags_all": ["batchtag"]}, "limit": 10}),
+        )
+        .await;
+        assert_eq!(listed.total, 2);
     }
 }

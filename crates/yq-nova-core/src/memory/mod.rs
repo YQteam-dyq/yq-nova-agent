@@ -1,22 +1,33 @@
 pub mod chunk;
+pub mod ops_batch;
 pub mod ops_export;
 pub mod ops_forget;
 pub mod ops_import;
+pub mod ops_list;
 pub mod ops_merge;
 pub mod ops_recall;
 pub mod ops_remember;
+pub mod ops_tag;
 pub mod ops_update;
 pub mod rank;
 
 use std::sync::Arc;
 
 pub use chunk::{ChunkInfo, ChunkOptions, SplitBy};
+pub use ops_batch::{
+    BatchRememberInput, BatchRememberItem, BatchRememberOutput, BatchRememberResult,
+};
 pub use ops_export::{ExportInput, ExportOutput};
 pub use ops_forget::{ForgetInput, ForgetMode, ForgetOutput};
 pub use ops_import::{ConflictStrategy, ImportError, ImportInput, ImportItem, ImportOutput};
+pub use ops_list::{ListInput, ListOutput};
 pub use ops_merge::{MergeInput, MergeOutput};
 pub use ops_recall::{RecallHit, RecallInput, RecallOutput};
 pub use ops_remember::{RememberInput, RememberOutput};
+pub use ops_tag::{
+    TagDeleteInput, TagDeleteOutput, TagListInput, TagListOutput, TagRenameInput,
+    TagRenameOutput,
+};
 pub use ops_update::UpdateInput;
 pub use rank::RankWeights;
 use serde::{Deserialize, Serialize};
@@ -144,11 +155,25 @@ impl MemoryService {
         ops_remember::remember(self, input).await
     }
 
+    pub async fn remember_batch(
+        &self,
+        input: ops_batch::BatchRememberInput,
+    ) -> NovaResult<ops_batch::BatchRememberOutput> {
+        ops_batch::remember_batch(self, input).await
+    }
+
     pub async fn recall(
         &self,
         input: ops_recall::RecallInput<'_>,
     ) -> NovaResult<ops_recall::RecallOutput> {
         ops_recall::recall(self, input).await
+    }
+
+    pub async fn list_memories(
+        &self,
+        input: ops_list::ListInput,
+    ) -> NovaResult<ops_list::ListOutput> {
+        ops_list::list_memories(self, input).await
     }
 
     pub async fn forget(
@@ -178,6 +203,27 @@ impl MemoryService {
 
     pub async fn update(&self, uuid: uuid::Uuid, input: UpdateInput) -> NovaResult<MemoryRecord> {
         ops_update::update_memory(self, uuid, input).await
+    }
+
+    pub async fn list_tags(
+        &self,
+        input: ops_tag::TagListInput,
+    ) -> NovaResult<ops_tag::TagListOutput> {
+        ops_tag::list_tags(self, input).await
+    }
+
+    pub async fn rename_tag(
+        &self,
+        input: ops_tag::TagRenameInput,
+    ) -> NovaResult<ops_tag::TagRenameOutput> {
+        ops_tag::rename_tag(self, input).await
+    }
+
+    pub async fn delete_tag(
+        &self,
+        input: ops_tag::TagDeleteInput,
+    ) -> NovaResult<ops_tag::TagDeleteOutput> {
+        ops_tag::delete_tag(self, input).await
     }
 
     pub async fn get_memory(&self, uuid: uuid::Uuid) -> NovaResult<MemoryRecord> {

@@ -1,7 +1,7 @@
 use axum::{
     Router,
     http::Method,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use tower_http::{
     compression::CompressionLayer,
@@ -16,6 +16,7 @@ pub mod graph;
 pub mod memory;
 pub mod meta;
 pub mod state;
+pub mod tags;
 
 pub use error::{AppError, fallback_404};
 pub use state::AppState;
@@ -29,7 +30,9 @@ pub fn build_router(state: AppState) -> Router {
     let api_v1 = Router::new()
         .route("/health", get(meta::health))
         .route("/stats", get(meta::stats))
+        .route("/memory/list", post(memory::list_memories))
         .route("/memory/remember", post(memory::remember))
+        .route("/memory/remember-batch", post(memory::remember_batch))
         .route("/memory/recall", post(memory::recall))
         .route("/memory/forget", post(memory::forget))
         .route("/memory/export", post(memory::export_memories))
@@ -39,6 +42,8 @@ pub fn build_router(state: AppState) -> Router {
             "/memory/:uuid",
             get(memory::get_memory).delete(memory::delete_memory).patch(memory::update_memory),
         )
+        .route("/tags", get(tags::list_tags))
+        .route("/tags/:name", patch(tags::rename_tag).delete(tags::delete_tag))
         .route("/graph/extract-and-link", post(graph::extract_and_link))
         .route("/graph/entities", post(graph::upsert_entity).get(graph::list_entities))
         .route("/graph/entities/merge", post(graph::merge_entities))

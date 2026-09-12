@@ -11,10 +11,13 @@ use yq_nova_core::{
     embedding::MockEmbeddingProvider,
     graph::{GraphService, TraverseOpts},
     memory::{
-        ForgetInput, ForgetMode, MemoryService, ops_forget::ForgetTarget, ops_recall::RecallInput,
-        ops_remember::RememberInput, ops_update::UpdateInput,
+        ForgetInput, ForgetMode, ListInput, MemoryService, TagListInput, ops_forget::ForgetTarget,
+        ops_recall::RecallInput, ops_remember::RememberInput, ops_update::UpdateInput,
     },
-    storage::{Database, MemoryFilter, MemoryRepository, MemoryStatus, SqliteMemoryRepository},
+    storage::{
+        Database, MemoryFilter, MemoryRepository, MemorySortOrder, MemoryStatus,
+        SqliteMemoryRepository, parse_statuses,
+    },
 };
 
 #[derive(Parser)]
@@ -183,6 +186,8 @@ async fn handle_tool_call(
         "nova_memory_update" => tool_update(args, memory).await,
         "nova_stats" => tool_stats(memory, graph).await,
         "nova_traverse" => tool_traverse(args, graph).await,
+        "nova_list" => tool_list(args, memory).await,
+        "nova_tags" => tool_tags(args, memory).await,
         _ => {
             return HandlerResult {
                 result: None,
@@ -391,6 +396,65 @@ async fn tool_traverse(
     Ok(serde_json::to_value(nodes)?)
 }
 
+fn parse_sort_order(raw: &str) -> Result<MemorySortOrder> {
+    Ok(match raw {
+        "created_desc" => MemorySortOrder::CreatedDesc,
+        "created_asc" => MemorySortOrder::CreatedAsc,
+        "importance_desc" => MemorySortOrder::ImportanceDesc,
+        "importance_asc" => MemorySortOrder::ImportanceAsc,
+        "accessed_desc" => MemorySortOrder::AccessedDesc,
+        other => return Err(anyhow::anyhow!("Unknown sort order: {}", other)),
+    })
+}
+
+async fn tool_list(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> anyhow::Result<serde_json::Value> {
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+    let sort = args.get("sort").and_then(|v| v.as_str()).unwrap_or("created_desc");
+    let tags: Vec<String> = args
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let status_in = if status == "all" {
+        vec![MemoryStatus::Active, MemoryStatus::Archived]
+    } else {
+        parse_statuses(status)?
+    };
+
+    let input = ListInput {
+        filter: MemoryFilter {
+            status_in: Some(status_in),
+            tags_all: if tags.is_empty() { None } else { Some(tags) },
+            ..Default::default()
+        },
+        limit,
+        offset,
+        sort: parse_sort_order(sort)?,
+    };
+    let out = memory.list_memories(input).await?;
+    Ok(serde_json::to_value(out)?)
+}
+
+async fn tool_tags(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> anyhow::Result<serde_json::Value> {
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
+    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let input = TagListInput {
+        limit,
+        offset,
+    };
+    let out = memory.list_tags(input).await?;
+    Ok(serde_json::to_value(out)?)
+}
+
 #[derive(Serialize)]
 struct ToolDef {
     name: String,
@@ -475,6 +539,31 @@ fn build_tool_list() -> Vec<ToolDef> {
                     "max_depth": {"type": "number", "description": "Max traversal depth", "default": 2}
                 },
                 "required": ["start_uuid"]
+            }),
+        },
+        ToolDef {
+            name: "nova_list".into(),
+            description: "List stored memories with tag filters, pagination and sorting".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "number", "description": "Max memories to return", "default": 20},
+                    "offset": {"type": "number", "description": "Number of memories to skip", "default": 0},
+                    "status": {"type": "string", "enum": ["active", "archived", "expired", "deleted", "all"], "description": "Status filter, 'all' covers active and archived", "default": "active"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Only return memories carrying all of these tags"},
+                    "sort": {"type": "string", "enum": ["created_desc", "created_asc", "importance_desc", "importance_asc", "accessed_desc"], "description": "Sort order", "default": "created_desc"}
+                }
+            }),
+        },
+        ToolDef {
+            name: "nova_tags".into(),
+            description: "List tags together with the number of memories attached to each".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "number", "description": "Max tags to return", "default": 100},
+                    "offset": {"type": "number", "description": "Number of tags to skip", "default": 0}
+                }
             }),
         },
     ]

@@ -227,6 +227,63 @@ class Client:
         }
         return self._request("POST", "/v1/memory/import", body)
 
+    def list_memories(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort: str = "created_desc",
+    ) -> Dict[str, Any]:
+
+        if limit < 1:
+            raise ValueError("list_memories: limit must be >= 1")
+        body: Dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "sort": sort,
+        }
+        if filter is not None:
+            body["filter"] = filter
+        return self._request("POST", "/v1/memory/list", body)
+
+    def remember_batch(
+        self,
+        items: List[Dict[str, Any]],
+        continue_on_error: bool = True,
+    ) -> Dict[str, Any]:
+
+        if not items:
+            raise ValueError("remember_batch: items must not be empty")
+        body: Dict[str, Any] = {
+            "items": items,
+            "continue_on_error": continue_on_error,
+        }
+        return self._request("POST", "/v1/memory/remember-batch", body)
+
+    def list_tags(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+
+        if limit < 1:
+            raise ValueError("list_tags: limit must be >= 1")
+        return self._request("GET", "/v1/tags", params={"limit": limit, "offset": offset})
+
+    def rename_tag(self, name: str, new_name: str) -> Dict[str, Any]:
+
+        if not name or not name.strip():
+            raise ValueError("rename_tag: name must be non-empty")
+        if not new_name or not new_name.strip():
+            raise ValueError("rename_tag: new_name must be non-empty")
+        return self._request("PATCH", f"/v1/tags/{_quote(name)}", {"new_name": new_name})
+
+    def delete_tag(self, name: str) -> Dict[str, Any]:
+
+        if not name or not name.strip():
+            raise ValueError("delete_tag: name must be non-empty")
+        return self._request("DELETE", f"/v1/tags/{_quote(name)}")
+
     def merge_entities(
         self,
         keep_uuid: str,

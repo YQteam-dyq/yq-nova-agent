@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{NovaError, NovaResult},
-    storage::{Database, MemoryFilter, MemorySource, MemoryStatus, Repository},
+    storage::{Database, MemoryFilter, MemorySortOrder, MemorySource, MemoryStatus, Repository},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +118,14 @@ pub trait MemoryRepository: Repository<MemoryRecord> {
         filter: &MemoryFilter,
         limit: usize,
         offset: usize,
+    ) -> NovaResult<Vec<MemoryRecord>>;
+    async fn list_ordered(
+        &self,
+        db: &Database,
+        filter: &MemoryFilter,
+        limit: usize,
+        offset: usize,
+        order: MemorySortOrder,
     ) -> NovaResult<Vec<MemoryRecord>>;
     async fn count(&self, db: &Database, filter: &MemoryFilter) -> NovaResult<i64>;
 }
@@ -358,10 +366,21 @@ impl MemoryRepository for SqliteMemoryRepository {
         limit: usize,
         offset: usize,
     ) -> NovaResult<Vec<MemoryRecord>> {
+        self.list_ordered(db, filter, limit, offset, MemorySortOrder::CreatedDesc).await
+    }
+
+    async fn list_ordered(
+        &self,
+        db: &Database,
+        filter: &MemoryFilter,
+        limit: usize,
+        offset: usize,
+        order: MemorySortOrder,
+    ) -> NovaResult<Vec<MemoryRecord>> {
         let built = build_filter(filter, false);
         let limit = limit.min(10_000) as i64;
         let offset = offset as i64;
-        let sql = format!("{} ORDER BY m.created_at DESC LIMIT ? OFFSET ?", built.sql);
+        let sql = format!("{} ORDER BY {} LIMIT ? OFFSET ?", built.sql, order.order_by_sql());
 
         let mut q = sqlx::query(&sql);
         for b in &built.binds {
