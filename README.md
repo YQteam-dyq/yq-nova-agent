@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/badge/sqlite-3.x-blue?logo=sqlite" alt="SQLite">
   <img src="https://img.shields.io/badge/license-BSL--1.1-red" alt="License">
   <img src="https://img.shields.io/badge/status-beta-green" alt="Status">
+  <img src="https://github.com/YQteam-dyq/yq-nova-agent/actions/workflows/ci.yml/badge.svg" alt="CI">
   <img src="https://img.shields.io/crates/v/yq-nova-core?logo=rust" alt="yq-nova-core">
   <img src="https://img.shields.io/crates/v/yq-nova-sdk?logo=rust" alt="yq-nova-sdk">
   <img src="https://img.shields.io/crates/v/yq-nova-server?logo=rust" alt="yq-nova-server">
@@ -82,13 +83,13 @@ cargo build --release -p yq-nova-server --bin yq-nova
 
 ## Docker
 
-### Compose（推荐）
+### Docker Compose (recommended)
 
 ```bash
 docker compose up -d
 ```
 
-### 直接构建并运行
+### Build and run directly
 
 ```bash
 docker build -t yq-nova .
@@ -98,7 +99,7 @@ docker run -p 7999:7999 \
   yq-nova serve
 ```
 
-> 数据卷 `yq-nova-data` 挂载到容器内 `/data`，SQLite 数据库持久化在 `/data/yq-nova.db`，容器重建后数据不丢失。
+> The `yq-nova-data` volume is mounted at `/data` inside the container and the SQLite database is persisted at `/data/yq-nova.db`, so the data survives container recreation.
 
 ---
 
@@ -158,7 +159,7 @@ yq-nova stats
                │
 ┌──────────────▼──────────────────────────────────┐
 │              yq-nova-server                      │
-│  axum HTTP · DTO validation · middleware st## CIThis repository uses GitHub Actions for CI. See [ci.yml](.github/workflows/ci.yml).ac> Test capture v2> Status: CI badge placeholderk   │
+│  axum HTTP · DTO validation · middleware stack   │
 └──────────────┬──────────────────────────────────┘
                │
 ┌──────────────▼──────────────────────────────────┐
@@ -184,10 +185,12 @@ yq-nova stats
 
 ```
 crates/
-├── yq-nova-core/    # Core library: storage, memory ops, embedding, graph
-├── yq-nova-server/  # HTTP server (axum) + CLI binary
-└── yq-nova-sdk/     # Rust HTTP client SDK with builder API
-migrations/          # SQLite schema migrations
+├── yq-nova-core/      # Core library: storage, memory ops, embedding, graph
+│   └── migrations/    # SQLite schema migrations
+├── yq-nova-server/    # HTTP server (axum) + CLI binary
+├── yq-nova-sdk/       # Rust HTTP client SDK with builder API
+└── yq-nova-mcp/       # MCP server exposing the memory API to AI clients
+python/                # Zero-dependency Python client SDK
 ```
 
 ---
@@ -215,6 +218,23 @@ dimensions = 1536
 
 ---
 
+## CI
+
+All workflows live in [`.github/workflows`](.github/workflows) and run on GitHub Actions:
+
+- [`ci.yml`](.github/workflows/ci.yml) - formatting, Clippy, build and unit tests for the whole workspace.
+- [`english-only.yml`](.github/workflows/english-only.yml) - enforces the [English-only policy](CONTRIBUTING.md#language-policy-mandatory) on pull request titles, pull request descriptions and added diff lines.
+
+Run the same checks locally before opening a pull request:
+
+```bash
+cargo +nightly fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
+
+---
+
 ## License
 
 **Business Source License 1.1** — see [LICENSE](LICENSE) for details.
@@ -223,35 +243,35 @@ Non-production and personal use are **free**. Commercial and production use requ
 
 ---
 
-## Agent 集成
+## Agent Integration
 
-### MCP 快速开始
+### MCP Quick Start
 
-yq-nova 提供 MCP (Model Context Protocol) 服务，让你可以直接在支持 MCP 的 AI 客户端中使用 yq-nova 的 memory 能力。
+yq-nova ships an MCP (Model Context Protocol) server, so the yq-nova memory API can be used directly from any MCP-capable AI client.
 
 ```bash
-# 启动 MCP 服务（假设 yq-nova-mcp 二进制已构建）
-./yq-nova-mcp serve --db-path ./nova.db
+# Start the MCP server (the yq-nova-mcp binary must be built first)
+./yq-nova-mcp --db-path ./nova.db
 ```
 
-启动后，在 **Claude Desktop** 或其他 MCP 客户端的配置文件中添加：
+Then add the following to the configuration file of **Claude Desktop** or another MCP client:
 
 ```json
 {
   "mcpServers": {
     "yq-nova": {
       "command": "./yq-nova-mcp",
-      "args": ["serve", "--db-path", "./nova.db"]
+      "args": ["--db-path", "./nova.db"]
     }
   }
 }
 ```
 
-MCP 服务暴露三个核心工具：`nova_remember`、`nova_recall`、`nova_forget`，AI 客户端会自动发现并调用。
+The MCP server exposes six tools: `nova_remember`, `nova_recall`, `nova_forget`, `nova_memory_update`, `nova_stats` and `nova_traverse`. AI clients discover and call them automatically.
 
-### OpenAI 工具调用 schema 示例
+### OpenAI tool-calling schema example
 
-以下 JSON schema 片段可直接用于 OpenAI function-calling：
+The JSON schema snippets below can be used directly for OpenAI function calling:
 
 ```json
 [
@@ -304,24 +324,21 @@ MCP 服务暴露三个核心工具：`nova_remember`、`nova_recall`、`nova_for
 ]
 ```
 
-典型的 OpenAI function-calling 调用流程：
+A typical OpenAI function-calling flow:
 
 ```
-1. 将上述 schema 作为 tools 参数传给 chat.completions.create()
-2. 当模型返回 tool_calls 时，解析 name 和 arguments
-3. 根据 name 调用 yq-nova HTTP API（remember / recall / forget）
-4. 将结果作为 tool 消息返回给模型继续对话
+1. Pass the schemas above as the tools argument of chat.completions.create()
+2. When the model returns tool_calls, parse name and arguments
+3. Call the yq-nova HTTP API (remember / recall / forget) according to name
+4. Return the result to the model as a tool message and continue the conversation
 ```
 
-完整可运行示例见 [`python/examples/openai_memory_tools.py`](python/examples/openai_memory_tools.py)。
+A complete runnable example is available at [`python/examples/openai_memory_tools.py`](python/examples/openai_memory_tools.py).
 
-### LangChain / LlamaIndex 对接思路
+### LangChain / LlamaIndex integration
 
-yq-nova 可以轻松集成到 LangChain 或 LlamaIndex 的 agent 工作流中：
+yq-nova integrates easily into LangChain or LlamaIndex agent workflows:
 
-- **LangChain**: 通过 `httpx` 或标准 `urllib` 调用 yq-nova HTTP API，将 `remember` / `recall` / `forget` 封装为 `Tool` 实例，然后注册到 `AgentExecutor` 或 `create_openai_tools_agent`。
-- **LlamaIndex**: 通过 `FunctionTool` 将 yq-nova 的操作包装成 `ToolMetadata`，定义对应的 JSON schema 后即可作为 `OpenAIAgent` 或 `ReActAgent` 的工具使用。
-- **通用原则**: 无论使用哪种框架，核心都是将 yq-nova 的三个操作（remember / recall / forget）映射为 function-calling 工具 schema，然后通过 HTTP 客户端调用 yq-nova 服务端 API。
-
-
-<!-- t -->
+- **LangChain**: call the yq-nova HTTP API through `httpx` or the standard `urllib`, wrap `remember` / `recall` / `forget` as `Tool` instances, then register them on an `AgentExecutor` or `create_openai_tools_agent`.
+- **LlamaIndex**: wrap the yq-nova operations as `ToolMetadata` through `FunctionTool`, define the matching JSON schema, and use them as tools of an `OpenAIAgent` or `ReActAgent`.
+- **General principle**: whichever framework is used, the core step is the same - map the three yq-nova operations (remember / recall / forget) to function-calling tool schemas and call the yq-nova server API through an HTTP client.

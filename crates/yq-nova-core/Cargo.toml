@@ -57,11 +57,11 @@ tracing-opentelemetry = { workspace = true, optional = true }
 
 [features]
 default = []
-# 本地 ONNX 推理（FastEmbed）。启用后 `embedding.fastembed_local` 可真正加载模型。
+# Local ONNX inference (FastEmbed); when enabled, `embedding.fastembed_local` can load a real model.
 fastembed = ["dep:fastembed"]
-# 基于 sqlite-vec 的 HNSW 向量索引后端（性能优于线性扫描）。
+# HNSW vector index backend based on sqlite-vec, faster than a linear scan.
 sqlite-vec = ["dep:sqlite-vec"]
-# OpenTelemetry 可观测性导出（tracing -> OTLP）。
+# OpenTelemetry observability export (tracing -> OTLP).
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",

@@ -1,31 +1,31 @@
 ---
 name: Bug report
-about: 提交缺陷反馈，帮助改进这个项目
+about: Report a defect to help improve this project
 title: "[Bug] "
 labels: bug
 assignees: ""
 ---
 
-## 描述
+## Description
 
-<!-- 清晰描述问题现象，以及你期望的行为。 -->
+<!-- Describe the problem clearly, and what you expected to happen instead. -->
 
-## 复现步骤
+## Steps to reproduce
 
-1. 执行 A
-2. 执行 B
-3. 观察到错误
+1. Run A
+2. Run B
+3. Observe the error
 
-## 环境
+## Environment
 
-- 操作系统：
-- 项目版本 / commit：
-- 相关依赖版本：
+- Operating system:
+- Project version / commit:
+- Relevant dependency versions:
 
-## 日志与截图
+## Logs and screenshots
 
-<!-- 附上报错日志、控制台输出或截图。 -->
+<!-- Attach the error log, console output or screenshots. -->
 
-## 其他
+## Additional context
 
-<!-- 任何可能有助于定位问题的补充信息。 -->
+<!-- Anything else that may help locate the problem. -->

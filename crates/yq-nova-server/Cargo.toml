@@ -20,7 +20,7 @@ path = "src/lib.rs"
 tokio = { workspace = true }
 futures = { workspace = true }
 
-# HTTP server# web
+# HTTP server and web stack
 axum = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { workspace = true }
@@ -51,7 +51,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 [features]
 default = []
-# 转发到 yq-nova-core：本地 ONNX embedding / HNSW 向量索引 / OTel 可观测性。
+# Forwarded to yq-nova-core: local ONNX embedding / HNSW vector index / OTel observability.
 fastembed    = ["yq-nova-core/fastembed"]
 sqlite-vec   = ["yq-nova-core/sqlite-vec"]
 otel         = ["yq-nova-core/otel"]
