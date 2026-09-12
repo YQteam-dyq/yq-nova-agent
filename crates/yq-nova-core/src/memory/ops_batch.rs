@@ -156,10 +156,7 @@ pub async fn remember_batch(
 mod tests {
     use super::*;
     use crate::{
-        Uuid,
-        config::StorageConfig,
-        memory::ops_remember::service_for_tests,
-        storage::Database,
+        Uuid, config::StorageConfig, memory::ops_remember::service_for_tests, storage::Database,
     };
 
     async fn temp_svc() -> MemoryService {

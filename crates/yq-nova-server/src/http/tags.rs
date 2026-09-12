@@ -186,11 +186,8 @@ mod tests {
         remember_with_tags(&router, "delete alpha entry", &["doomed"]).await;
         remember_with_tags(&router, "delete beta entry", &["doomed"]).await;
 
-        let req = Request::builder()
-            .uri("/v1/tags/doomed")
-            .method("DELETE")
-            .body(Body::empty())
-            .unwrap();
+        let req =
+            Request::builder().uri("/v1/tags/doomed").method("DELETE").body(Body::empty()).unwrap();
         let resp = router.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();

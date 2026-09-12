@@ -718,11 +718,8 @@ mod tests {
             router.clone().oneshot(req).await.unwrap();
         }
 
-        let out = list_req(
-            &router,
-            serde_json::json!({"sort": "importance_desc", "limit": 10}),
-        )
-        .await;
+        let out =
+            list_req(&router, serde_json::json!({"sort": "importance_desc", "limit": 10})).await;
         let contents: Vec<String> = out.items.iter().map(|m| m.content.clone()).collect();
         assert_eq!(contents, vec!["rank high", "rank mid", "rank low"]);
     }

@@ -25,8 +25,7 @@ pub use ops_merge::{MergeInput, MergeOutput};
 pub use ops_recall::{RecallHit, RecallInput, RecallOutput};
 pub use ops_remember::{RememberInput, RememberOutput};
 pub use ops_tag::{
-    TagDeleteInput, TagDeleteOutput, TagListInput, TagListOutput, TagRenameInput,
-    TagRenameOutput,
+    TagDeleteInput, TagDeleteOutput, TagListInput, TagListOutput, TagRenameInput, TagRenameOutput,
 };
 pub use ops_update::UpdateInput;
 pub use rank::RankWeights;

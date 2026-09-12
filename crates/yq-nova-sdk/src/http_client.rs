@@ -549,10 +549,7 @@ impl HttpClient {
         self.post_json("/v1/memory/list", &req).await
     }
 
-    pub async fn remember_batch(
-        &self,
-        req: BatchRememberInput,
-    ) -> NovaResult<BatchRememberOutput> {
+    pub async fn remember_batch(&self, req: BatchRememberInput) -> NovaResult<BatchRememberOutput> {
         self.post_json("/v1/memory/remember-batch", &req).await
     }
 

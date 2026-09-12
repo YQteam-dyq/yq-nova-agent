@@ -80,10 +80,7 @@ pub async fn list_tags(svc: &MemoryService, input: TagListInput) -> NovaResult<T
     })
 }
 
-pub async fn rename_tag(
-    svc: &MemoryService,
-    input: TagRenameInput,
-) -> NovaResult<TagRenameOutput> {
+pub async fn rename_tag(svc: &MemoryService, input: TagRenameInput) -> NovaResult<TagRenameOutput> {
     let name = input.name.trim();
     let new_name = input.new_name.trim();
     if name.is_empty() {
@@ -99,10 +96,7 @@ pub async fn rename_tag(
     })
 }
 
-pub async fn delete_tag(
-    svc: &MemoryService,
-    input: TagDeleteInput,
-) -> NovaResult<TagDeleteOutput> {
+pub async fn delete_tag(svc: &MemoryService, input: TagDeleteInput) -> NovaResult<TagDeleteOutput> {
     let name = input.name.trim();
     if name.is_empty() {
         return Err(NovaError::validation("tags: name must not be empty"));

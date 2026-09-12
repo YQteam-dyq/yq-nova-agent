@@ -212,8 +212,7 @@ impl TagRepository for SqliteTagRepository {
 
     async fn delete_tag(&self, db: &Database, name: &str) -> NovaResult<i64> {
         let affected: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memory_tags WHERE tag_id = (SELECT id FROM tags WHERE \
-             name = ?1)",
+            "SELECT COUNT(*) FROM memory_tags WHERE tag_id = (SELECT id FROM tags WHERE name = ?1)",
         )
         .bind(name)
         .fetch_one(&db.pool)

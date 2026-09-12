@@ -194,10 +194,7 @@ impl EmbeddedNova {
         self.memory.list_memories(req).await
     }
 
-    pub async fn remember_batch(
-        &self,
-        req: BatchRememberInput,
-    ) -> NovaResult<BatchRememberOutput> {
+    pub async fn remember_batch(&self, req: BatchRememberInput) -> NovaResult<BatchRememberOutput> {
         self.memory.remember_batch(req).await
     }
 

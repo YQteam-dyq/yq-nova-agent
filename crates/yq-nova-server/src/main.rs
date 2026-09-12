@@ -12,7 +12,9 @@ use yq_nova_core::{
         ForgetMode, MemoryService, SearchMode, ops_forget, ops_list, ops_recall, ops_remember,
         ops_tag,
     },
-    storage::{Database, MemoryFilter, MemorySortOrder, MemorySource, parse_sources, parse_statuses},
+    storage::{
+        Database, MemoryFilter, MemorySortOrder, MemorySource, parse_sources, parse_statuses,
+    },
 };
 
 mod background;
