@@ -253,7 +253,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(out.duplicate == false);
+        assert!(!out.duplicate);
 
         let mem_before = svc.get_memory(out.uuid).await.unwrap();
         assert!(mem_before.expires_at.is_some());
