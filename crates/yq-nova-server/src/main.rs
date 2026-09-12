@@ -8,8 +8,13 @@ use yq_nova_core::{
     error::NovaResult,
     graph::{GraphService, extractor::RegexWikiExtractor},
     logging,
-    memory::{ForgetMode, MemoryService, SearchMode, ops_forget, ops_recall, ops_remember},
-    storage::{Database, MemorySource},
+    memory::{
+        ForgetMode, MemoryService, SearchMode, ops_forget, ops_list, ops_recall, ops_remember,
+        ops_tag,
+    },
+    storage::{
+        Database, MemoryFilter, MemorySortOrder, MemorySource, parse_sources, parse_statuses,
+    },
 };
 
 mod background;
@@ -50,6 +55,10 @@ enum Commands {
     Forget(ForgetArgs),
 
     Stats,
+
+    List(ListArgs),
+
+    Tags(TagsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -199,6 +208,73 @@ impl From<ForgetModeCli> for ForgetMode {
             ForgetModeCli::Hard => ForgetMode::Hard,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SortOrderCli {
+    CreatedDesc,
+    CreatedAsc,
+    ImportanceDesc,
+    ImportanceAsc,
+    AccessedDesc,
+}
+impl std::fmt::Display for SortOrderCli {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(MemorySortOrder::from(*self).as_str())
+    }
+}
+impl From<SortOrderCli> for MemorySortOrder {
+    fn from(v: SortOrderCli) -> Self {
+        match v {
+            SortOrderCli::CreatedDesc => MemorySortOrder::CreatedDesc,
+            SortOrderCli::CreatedAsc => MemorySortOrder::CreatedAsc,
+            SortOrderCli::ImportanceDesc => MemorySortOrder::ImportanceDesc,
+            SortOrderCli::ImportanceAsc => MemorySortOrder::ImportanceAsc,
+            SortOrderCli::AccessedDesc => MemorySortOrder::AccessedDesc,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    #[arg(long, default_value_t = 20)]
+    limit: u32,
+
+    #[arg(long, default_value_t = 0)]
+    offset: u32,
+
+    #[arg(long, value_enum, default_value_t = SortOrderCli::CreatedDesc)]
+    sort: SortOrderCli,
+
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    #[arg(long)]
+    status: Option<String>,
+
+    #[arg(long)]
+    source: Option<String>,
+
+    #[arg(long)]
+    importance_min: Option<f32>,
+
+    #[arg(long)]
+    importance_max: Option<f32>,
+
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct TagsArgs {
+    #[arg(long, default_value_t = 50)]
+    limit: u32,
+
+    #[arg(long, default_value_t = 0)]
+    offset: u32,
+
+    #[arg(long)]
+    json: bool,
 }
 
 fn clap_num() -> impl clap::builder::TypedValueParser<Value = f32> {
@@ -451,6 +527,62 @@ async fn run() -> NovaResult<()> {
             );
             db.close().await
         },
+        Commands::List(args) => {
+            let (db, memory, _graph, _provider_name) = open_core_services(&cfg).await?;
+            let status_in = match args.status.as_deref() {
+                Some(raw) => Some(parse_statuses(raw)?),
+                None => None,
+            };
+            let source_in = match args.source.as_deref() {
+                Some(raw) => Some(parse_sources(raw)?),
+                None => None,
+            };
+            let filter = MemoryFilter {
+                status_in,
+                source_in,
+                importance_min: args.importance_min,
+                importance_max: args.importance_max,
+                tags_all: if args.tags.is_empty() { None } else { Some(args.tags) },
+                ..Default::default()
+            };
+            let out = memory
+                .list_memories(ops_list::ListInput {
+                    filter,
+                    limit: args.limit,
+                    offset: args.offset,
+                    sort: args.sort.into(),
+                })
+                .await?;
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&out)
+                        .map_err(|e| yq_nova_core::NovaError::internal(e.to_string()))?
+                );
+            } else {
+                print_memory_list(&out);
+            }
+            db.close().await
+        },
+        Commands::Tags(args) => {
+            let (db, memory, _graph, _provider_name) = open_core_services(&cfg).await?;
+            let out = memory
+                .list_tags(ops_tag::TagListInput {
+                    limit: args.limit,
+                    offset: args.offset,
+                })
+                .await?;
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&out)
+                        .map_err(|e| yq_nova_core::NovaError::internal(e.to_string()))?
+                );
+            } else {
+                print_tags(&out);
+            }
+            db.close().await
+        },
         Commands::Serve => {
             let db = Database::open(cfg.storage.clone()).await?;
             info!(size_bytes = db.size_on_disk_bytes()?, "database ready");
@@ -533,6 +665,36 @@ async fn run() -> NovaResult<()> {
             db.close().await?;
             Ok(())
         },
+    }
+}
+
+fn print_memory_list(out: &ops_list::ListOutput) {
+    println!(
+        "total={total} count={count} limit={limit} offset={offset} sort={sort}",
+        total = out.total,
+        count = out.count,
+        limit = out.limit,
+        offset = out.offset,
+        sort = out.sort.as_str(),
+    );
+    for (i, m) in out.items.iter().enumerate() {
+        let snippet: String = m.content.chars().take(80).collect();
+        println!(
+            "  #{idx:>3}: imp={imp:.2} acc={acc:<4} status={st:<8} tags={tags:?} {snip}",
+            idx = i + 1,
+            imp = m.importance,
+            acc = m.access_count,
+            st = m.status,
+            tags = m.tags,
+            snip = snippet,
+        );
+    }
+}
+
+fn print_tags(out: &ops_tag::TagListOutput) {
+    println!("total={total} count={count}", total = out.total, count = out.count);
+    for t in &out.items {
+        println!("  {name:<32} memories={count}", name = t.name, count = t.memory_count);
     }
 }
 

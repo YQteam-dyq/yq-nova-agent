@@ -56,6 +56,12 @@ pub trait TagRepository: Repository<TagRecord> {
     ) -> NovaResult<Vec<TagRecord>>;
 
     async fn get_tag_by_name(&self, db: &Database, name: &str) -> NovaResult<Option<TagRecord>>;
+
+    async fn count_all_tags(&self, db: &Database) -> NovaResult<i64>;
+
+    async fn rename_tag(&self, db: &Database, name: &str, new_name: &str) -> NovaResult<()>;
+
+    async fn delete_tag(&self, db: &Database, name: &str) -> NovaResult<i64>;
 }
 
 #[derive(Clone)]
@@ -167,6 +173,55 @@ impl TagRepository for SqliteTagRepository {
             None => Ok(None),
         }
     }
+
+    async fn count_all_tags(&self, db: &Database) -> NovaResult<i64> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+            .fetch_one(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
+        Ok(n)
+    }
+
+    async fn rename_tag(&self, db: &Database, name: &str, new_name: &str) -> NovaResult<()> {
+        let target = new_name.trim();
+        if target.is_empty() {
+            return Err(NovaError::validation("tag.new_name must not be empty"));
+        }
+        if target == name {
+            return Ok(());
+        }
+        let mut tx = db.begin().await?;
+        let res = sqlx::query("UPDATE tags SET name = ?1 WHERE name = ?2")
+            .bind(target)
+            .bind(name)
+            .execute(&mut *tx)
+            .await
+            .map_err(NovaError::from)?;
+        if res.rows_affected() == 0 {
+            return Err(NovaError::not_found(format!("tag {name}")));
+        }
+        tx.commit().await.map_err(NovaError::from)?;
+        Ok(())
+    }
+
+    async fn delete_tag(&self, db: &Database, name: &str) -> NovaResult<i64> {
+        let affected: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_tags WHERE tag_id = (SELECT id FROM tags WHERE name = ?1)",
+        )
+        .bind(name)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
+        let res = sqlx::query("DELETE FROM tags WHERE name = ?1")
+            .bind(name)
+            .execute(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
+        if res.rows_affected() == 0 {
+            return Err(NovaError::not_found(format!("tag {name}")));
+        }
+        Ok(affected)
+    }
 }
 
 fn row_to_tag(row: &sqlx::sqlite::SqliteRow) -> NovaResult<TagRecord> {
@@ -262,5 +317,45 @@ mod tests {
         assert_eq!(by_name.get("shared"), Some(&2));
         assert_eq!(by_name.get("one"), Some(&1));
         assert_eq!(by_name.get("two"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn rename_and_delete_tag_keep_associations_consistent() {
+        let db = temp_db().await;
+        let tags = SqliteTagRepository::new();
+        let mem = SqliteMemoryRepository::new();
+        for (text, tag_list) in [
+            ("m1", vec!["legacy".to_string(), "keep".to_string()]),
+            ("m2", vec!["legacy".to_string()]),
+            ("m3", vec!["keep".to_string()]),
+        ] {
+            mem.insert(
+                &db,
+                InsertMemoryInput {
+                    content: text,
+                    tags: &tag_list,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(tags.count_all_tags(&db).await.unwrap(), 2);
+
+        tags.rename_tag(&db, "legacy", "archive").await.unwrap();
+        let renamed = tags.get_tag_by_name(&db, "archive").await.unwrap().unwrap();
+        assert_eq!(renamed.memory_count, 2);
+        assert!(tags.get_tag_by_name(&db, "legacy").await.unwrap().is_none());
+
+        let conflict = tags.rename_tag(&db, "keep", "archive").await.unwrap_err();
+        assert_eq!(conflict.code(), crate::error::ErrorCode::Conflict);
+
+        let affected = tags.delete_tag(&db, "archive").await.unwrap();
+        assert_eq!(affected, 2);
+        assert_eq!(tags.count_all_tags(&db).await.unwrap(), 1);
+
+        let gone = tags.delete_tag(&db, "archive").await.unwrap_err();
+        assert_eq!(gone.code(), crate::error::ErrorCode::NotFound);
     }
 }

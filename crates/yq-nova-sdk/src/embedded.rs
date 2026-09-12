@@ -7,9 +7,10 @@ use yq_nova_core::{
     error::{NovaError, NovaResult},
     graph::{GraphService, LinkResult, MergeEntitiesInput, TraverseNode, TraverseOpts},
     memory::{
-        ConflictStrategy, ExportInput, ForgetInput, ForgetOutput, ImportInput, ImportItem,
-        MemoryService, RecallOutput, RememberOutput, UpdateInput, ops_forget, ops_recall,
-        ops_remember,
+        BatchRememberInput, BatchRememberOutput, ConflictStrategy, ExportInput, ForgetInput,
+        ForgetOutput, ImportInput, ImportItem, ListInput, ListOutput, MemoryService, RecallOutput,
+        RememberOutput, TagDeleteInput, TagDeleteOutput, TagListInput, TagListOutput,
+        TagRenameInput, TagRenameOutput, UpdateInput, ops_forget, ops_recall, ops_remember,
     },
     storage::{Database, MemoryRecord, entity::EntityRepository},
 };
@@ -187,6 +188,37 @@ impl EmbeddedNova {
                 })
                 .collect(),
         })
+    }
+
+    pub async fn list_memories(&self, req: ListInput) -> NovaResult<ListOutput> {
+        self.memory.list_memories(req).await
+    }
+
+    pub async fn remember_batch(&self, req: BatchRememberInput) -> NovaResult<BatchRememberOutput> {
+        self.memory.remember_batch(req).await
+    }
+
+    pub async fn list_tags(&self, limit: u32, offset: u32) -> NovaResult<TagListOutput> {
+        let input = TagListInput {
+            limit,
+            offset,
+        };
+        self.memory.list_tags(input).await
+    }
+
+    pub async fn rename_tag(&self, name: &str, new_name: &str) -> NovaResult<TagRenameOutput> {
+        let input = TagRenameInput {
+            name: name.to_string(),
+            new_name: new_name.to_string(),
+        };
+        self.memory.rename_tag(input).await
+    }
+
+    pub async fn delete_tag(&self, name: &str) -> NovaResult<TagDeleteOutput> {
+        let input = TagDeleteInput {
+            name: name.to_string(),
+        };
+        self.memory.delete_tag(input).await
     }
 
     pub async fn upsert_entity(
