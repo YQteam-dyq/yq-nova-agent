@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use yq_nova_core::{
@@ -170,9 +169,8 @@ async fn main() -> NovaResult<()> {
     };
     let out = client
         .extract_and_link(ExtractAndLinkRequest {
-            text: "Lachlan reviewed the [[SVD]] factorization patch for \
-                   #recommender systems and commented on #rustlang's matrix-ops \
-                   package."
+            text: "Lachlan reviewed the [[SVD]] factorization patch for #recommender systems and \
+                   commented on #rustlang's matrix-ops package."
                 .into(),
             opts,
         })
@@ -188,7 +186,10 @@ async fn main() -> NovaResult<()> {
     }
 
     println!("\n==> forget(tag=api, mode=Hard)");
-    let f = MemoryFilter { tags_all: Some(vec!["api".to_string()]), ..Default::default() };
+    let f = MemoryFilter {
+        tags_all: Some(vec!["api".to_string()]),
+        ..Default::default()
+    };
     let forgotten = client
         .forget(ops_forget::ForgetInput {
             target: ops_forget::ForgetTarget::Filter(f),

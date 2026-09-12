@@ -1,4 +1,3 @@
-
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
@@ -8,7 +7,6 @@ use crate::error::NovaResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct EmbeddingMeta {
-
     pub provider: String,
 
     pub model: String,
@@ -18,7 +16,6 @@ pub struct EmbeddingMeta {
 
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync + Debug {
-
     fn meta(&self) -> &EmbeddingMeta;
 
     async fn embed_batch(&self, texts: &[&str]) -> NovaResult<Vec<Vec<f32>>>;
@@ -41,7 +38,6 @@ pub struct EmbeddingRegistry {
 }
 
 impl EmbeddingRegistry {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -67,10 +63,13 @@ pub struct MockEmbeddingProvider {
 }
 
 impl MockEmbeddingProvider {
-
     pub fn new(dims: usize) -> Self {
         Self {
-            meta: EmbeddingMeta { provider: "mock".into(), model: format!("mock-{dims}d"), dims },
+            meta: EmbeddingMeta {
+                provider: "mock".into(),
+                model: format!("mock-{dims}d"),
+                dims,
+            },
             return_zero: false,
         }
     }
@@ -106,7 +105,6 @@ pub fn deterministic_pseudo_embedding(text: &str, dims: usize) -> Vec<f32> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(dims);
     for i in 0..dims {
-
         let mut h: u64 = 0xcbf29ce484222325;
         h ^= i as u64;
         h = h.wrapping_mul(0x100000001b3);

@@ -1,11 +1,10 @@
-
 use axum::{
     Json,
     body::Body,
     extract::State,
     http::{Request, StatusCode, header},
-    response::{IntoResponse, Response},
     middleware::Next,
+    response::{IntoResponse, Response},
 };
 
 use crate::http::{AppState, error::ErrorBody};
@@ -40,14 +39,14 @@ pub async fn auth_middleware(
 
     let candidate = provided
         .as_deref()
-        .and_then(|v| {
+        .map(|v| {
             let trimmed = v.trim();
             if let Some(rest) = trimmed.strip_prefix("Bearer ") {
-                Some(rest.trim())
+                rest.trim()
             } else if let Some(rest) = trimmed.strip_prefix("bearer ") {
-                Some(rest.trim())
+                rest.trim()
             } else {
-                Some(trimmed)
+                trimmed
             }
         })
         .unwrap_or("");
@@ -68,9 +67,10 @@ pub async fn auth_middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     use yq_nova_core::{
@@ -80,6 +80,8 @@ mod tests {
         storage::{Database, Migrator},
     };
 
+    use super::*;
+
     async fn make_router(auth_token: &str) -> axum::Router {
         let dir = std::env::temp_dir().join(format!(
             "yq-nova-test-auth-{}-{}",
@@ -88,7 +90,10 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let db_path = dir.join("nova.sqlite");
-        let storage_cfg = StorageConfig { db_path, ..Default::default() };
+        let storage_cfg = StorageConfig {
+            db_path,
+            ..Default::default()
+        };
         let db = Database::open(storage_cfg.clone()).await.expect("open db");
         Migrator::run(&db.pool).await.expect("migrations");
 
@@ -99,7 +104,10 @@ mod tests {
             std::sync::Arc::new(RegexWikiExtractor::new()),
         );
 
-        let srv_cfg = ServerConfig { auth_token: auth_token.into(), ..Default::default() };
+        let srv_cfg = ServerConfig {
+            auth_token: auth_token.into(),
+            ..Default::default()
+        };
         let state = AppState::new(srv_cfg, db, memory, graph);
         crate::http::build_router(state)
     }
@@ -109,8 +117,7 @@ mod tests {
     #[tokio::test]
     async fn missing_auth_header_returns_401() {
         let router = make_router("secret123").await;
-        let req =
-            Request::builder().uri(HEALTH).method("GET").body(Body::empty()).unwrap();
+        let req = Request::builder().uri(HEALTH).method("GET").body(Body::empty()).unwrap();
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
@@ -149,8 +156,7 @@ mod tests {
     #[tokio::test]
     async fn empty_token_disables_auth() {
         let router = make_router("").await;
-        let req =
-            Request::builder().uri(HEALTH).method("GET").body(Body::empty()).unwrap();
+        let req = Request::builder().uri(HEALTH).method("GET").body(Body::empty()).unwrap();
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }

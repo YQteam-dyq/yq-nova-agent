@@ -1,6 +1,7 @@
-
 use std::sync::Arc;
 
+#[cfg(feature = "fastembed")]
+use yq_nova_core::embedding::{EmbeddingProvider, FastEmbedProvider, FastEmbedProviderConfig};
 use yq_nova_core::{
     config::{EmbeddingConfig, FastEmbedConfig},
     embedding::{
@@ -9,8 +10,6 @@ use yq_nova_core::{
     },
     error::{NovaError, NovaResult},
 };
-#[cfg(feature = "fastembed")]
-use yq_nova_core::embedding::{EmbeddingProvider, FastEmbedProvider, FastEmbedProviderConfig};
 
 pub fn build_default_provider(
     cfg: &EmbeddingConfig,
@@ -54,8 +53,8 @@ pub fn build_default_provider(
     }
 
     Err(NovaError::config_msg(format!(
-        "embedding.default_provider='{key}' not found. \
-         Available keys: openai_compatible keys: [{}], fastembed keys: [{}], special: 'mock'",
+        "embedding.default_provider='{key}' not found. Available keys: openai_compatible keys: \
+         [{}], fastembed keys: [{}], special: 'mock'",
         cfg.openai_compatible.keys().cloned().collect::<Vec<_>>().join(", "),
         cfg.fastembed_local.keys().cloned().collect::<Vec<_>>().join(", "),
     )))
@@ -89,9 +88,8 @@ fn build_fastembed_impl(
     key: &str,
 ) -> NovaResult<(String, SharedEmbeddingProvider, usize)> {
     Err(NovaError::config_msg(format!(
-        "fastembed-local provider '{key}' requires --features fastembed; \
-         current binary was built without local-onnx support. \
-         Tip: use 'mock' or an openai_compatible provider for now.",
+        "fastembed-local provider '{key}' requires --features fastembed; current binary was built \
+         without local-onnx support. Tip: use 'mock' or an openai_compatible provider for now.",
     )))
 }
 
@@ -107,7 +105,10 @@ pub fn build_registry(
             dims: oai.dimensions.max(1),
             batch_size: oai.batch_size.max(1),
             request_timeout: oai.timeout,
-            retry: RetryConfig { max_attempts: oai.max_retries.max(1), ..Default::default() },
+            retry: RetryConfig {
+                max_attempts: oai.max_retries.max(1),
+                ..Default::default()
+            },
         };
         match OpenAiCompatProvider::new(embed_config) {
             Ok(p) => {
@@ -140,7 +141,10 @@ mod tests {
 
     #[test]
     fn mock_provider_returns_mock_name_and_dims() {
-        let cfg = EmbeddingConfig { default_provider: "mock".into(), ..Default::default() };
+        let cfg = EmbeddingConfig {
+            default_provider: "mock".into(),
+            ..Default::default()
+        };
         let (name, _p, dims) = build_default_provider(&cfg).unwrap();
         assert_eq!(name, "mock");
         assert!(dims >= 1);
@@ -148,8 +152,10 @@ mod tests {
 
     #[test]
     fn unknown_provider_returns_config_error() {
-        let cfg =
-            EmbeddingConfig { default_provider: "does-not-exist".into(), ..Default::default() };
+        let cfg = EmbeddingConfig {
+            default_provider: "does-not-exist".into(),
+            ..Default::default()
+        };
         let err = build_default_provider(&cfg).unwrap_err();
         assert_eq!(err.code(), yq_nova_core::error::ErrorCode::Config);
     }

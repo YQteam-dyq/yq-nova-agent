@@ -1,10 +1,8 @@
-
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use reqwest::{Client as ReqwestClient, Response, StatusCode, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-
 use yq_nova_core::{
     Uuid,
     error::{ErrorCode, NovaError, NovaResult},
@@ -22,7 +20,6 @@ use yq_nova_core::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RememberRequest {
-
     pub content: String,
 
     pub source: MemorySource,
@@ -61,7 +58,6 @@ impl Default for RememberRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct RecallRequest {
-
     pub query: String,
 
     pub top_k: usize,
@@ -91,7 +87,6 @@ pub struct RecallRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpsertEntityRequest {
-
     pub name: String,
 
     #[serde(rename = "type")]
@@ -115,7 +110,6 @@ impl Default for UpsertEntityRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertEntityResponse {
-
     #[serde(flatten)]
     pub outcome: UpsertOutcome,
 
@@ -125,7 +119,6 @@ pub struct UpsertEntityResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpsertRelationRequest {
-
     pub source_uuid: Uuid,
 
     pub target_uuid: Uuid,
@@ -157,7 +150,6 @@ impl Default for UpsertRelationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertRelationResponse {
-
     pub inserted: bool,
 
     pub updated: bool,
@@ -170,7 +162,6 @@ pub struct UpsertRelationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TraverseRequest {
-
     pub start: Uuid,
 
     pub max_depth: u8,
@@ -197,7 +188,6 @@ impl Default for TraverseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ExtractAndLinkRequest {
-
     pub text: String,
 
     pub opts: GraphExtractOpts,
@@ -236,7 +226,11 @@ pub struct ExportMemoriesRequest {
 
 impl Default for ExportMemoriesRequest {
     fn default() -> Self {
-        Self { filter: None, limit: 500, offset: 0 }
+        Self {
+            filter: None,
+            limit: 500,
+            offset: 0,
+        }
     }
 }
 
@@ -268,7 +262,11 @@ pub struct ImportMemoriesRequest {
 
 impl Default for ImportMemoriesRequest {
     fn default() -> Self {
-        Self { items: vec![], embed: true, on_conflict: "skip".into() }
+        Self {
+            items: vec![],
+            embed: true,
+            on_conflict: "skip".into(),
+        }
     }
 }
 
@@ -301,7 +299,6 @@ pub struct MergeEntitiesResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
-
     pub status: String,
 
     pub version: String,
@@ -314,7 +311,6 @@ pub struct HealthResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct StatsResponse {
-
     pub uptime_secs: u64,
 
     pub database_size_bytes: u64,
@@ -347,7 +343,6 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-
     pub fn new(base_url: impl Into<String>) -> NovaResult<Self> {
         Self::with_timeout(base_url, Duration::from_secs(30))
     }
@@ -369,7 +364,10 @@ impl HttpClient {
             .pool_idle_timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| NovaError::internal_with_ctx("build reqwest client", e))?;
-        Ok(Self { client, base_url: base })
+        Ok(Self {
+            client,
+            base_url: base,
+        })
     }
 
     pub fn base_url(&self) -> &str {
@@ -552,11 +550,17 @@ impl HttpClient {
     }
 
     pub fn remember_builder(&self) -> RememberReqBuilder<'_> {
-        RememberReqBuilder { client: self, req: RememberRequest::default() }
+        RememberReqBuilder {
+            client: self,
+            req: RememberRequest::default(),
+        }
     }
 
     pub fn recall_builder(&self) -> RecallReqBuilder<'_> {
-        RecallReqBuilder { client: self, req: RecallRequest::default() }
+        RecallReqBuilder {
+            client: self,
+            req: RecallRequest::default(),
+        }
     }
 
     pub async fn upsert_entity(
@@ -681,7 +685,6 @@ pub struct RememberReqBuilder<'a> {
 }
 
 impl<'a> RememberReqBuilder<'a> {
-
     pub fn content(mut self, s: impl Into<String>) -> Self {
         self.req.content = s.into();
         self
@@ -749,7 +752,6 @@ pub struct RecallReqBuilder<'a> {
 }
 
 impl<'a> RecallReqBuilder<'a> {
-
     pub fn query(mut self, q: impl Into<String>) -> Self {
         self.req.query = q.into();
         self
@@ -781,8 +783,11 @@ impl<'a> RecallReqBuilder<'a> {
     }
 
     pub fn graph_enable(mut self, max_depth: u8) -> Self {
-        self.req.graph =
-            GraphTraversalOpts { enabled: true, max_depth, predicate_whitelist: vec![] };
+        self.req.graph = GraphTraversalOpts {
+            enabled: true,
+            max_depth,
+            predicate_whitelist: vec![],
+        };
         self
     }
 
@@ -836,18 +841,18 @@ impl<'a> RecallReqBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
 
     use yq_nova_core::{
         Uuid,
         config::{ServerConfig, StorageConfig},
         embedding::MockEmbeddingProvider,
-        graph::extractor::RegexWikiExtractor,
-        graph::{GraphExtractOpts, GraphService},
+        graph::{GraphExtractOpts, GraphService, extractor::RegexWikiExtractor},
         memory::{ForgetMode, MemoryService, ops_forget},
         storage::{Database, MemoryStatus},
     };
+
+    use super::*;
 
     fn tmp_db(tag: &str) -> StorageConfig {
         use std::time::{SystemTime, UNIX_EPOCH};

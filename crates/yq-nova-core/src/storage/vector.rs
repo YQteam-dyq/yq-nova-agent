@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,7 +15,6 @@ pub struct VectorHit {
 
 #[async_trait]
 pub trait VectorStore: Send + Sync + std::fmt::Debug {
-
     fn dimensions(&self) -> usize;
 
     async fn insert_vector(
@@ -111,7 +109,10 @@ impl std::fmt::Debug for SqliteVectorStore {
 
 impl SqliteVectorStore {
     pub fn new(pool: sqlx::SqlitePool, dims: usize) -> Self {
-        Self { pool, dims }
+        Self {
+            pool,
+            dims,
+        }
     }
 
     pub fn with_db(db: &crate::storage::Database, dims: usize) -> Self {
@@ -149,13 +150,9 @@ impl VectorStore for SqliteVectorStore {
         let mem_s = memory_uuid.to_string();
         sqlx::query(
             "INSERT INTO embeddings (memory_uuid, dims, provider, model, vec_blob, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(memory_uuid) DO UPDATE SET \
-               dims = excluded.dims, \
-               provider = excluded.provider, \
-               model = excluded.model, \
-               vec_blob = excluded.vec_blob, \
-               created_at = excluded.created_at",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(memory_uuid) DO UPDATE SET dims = \
+             excluded.dims, provider = excluded.provider, model = excluded.model, vec_blob = \
+             excluded.vec_blob, created_at = excluded.created_at",
         )
         .bind(&mem_s)
         .bind(self.dims as i64)
@@ -186,7 +183,7 @@ impl VectorStore for SqliteVectorStore {
         threshold: f32,
     ) -> NovaResult<Vec<VectorHit>> {
         check_dims(self.dims, query)?;
-        let k = k.min(500); 
+        let k = k.min(500);
 
         let rows: Vec<(String, Vec<u8>)> =
             sqlx::query_as("SELECT memory_uuid, vec_blob FROM embeddings WHERE dims = ?1")
@@ -199,7 +196,7 @@ impl VectorStore for SqliteVectorStore {
         for (mem_s, blob) in rows {
             let v = match blob_to_vec(&blob) {
                 Ok(v) => v,
-                Err(_) => continue, 
+                Err(_) => continue,
             };
             if v.len() != query.len() {
                 continue;
@@ -210,7 +207,10 @@ impl VectorStore for SqliteVectorStore {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
-                hits.push(VectorHit { memory_uuid: mem_uuid, similarity: sim });
+                hits.push(VectorHit {
+                    memory_uuid: mem_uuid,
+                    similarity: sim,
+                });
             }
         }
 
@@ -225,10 +225,12 @@ impl VectorStore for SqliteVectorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StorageConfig;
-    use crate::storage::{
-        Database,
-        memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
+    use crate::{
+        config::StorageConfig,
+        storage::{
+            Database,
+            memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
+        },
     };
 
     async fn temp_db() -> Database {
@@ -248,7 +250,13 @@ mod tests {
         let db = temp_db().await;
         let mem = SqliteMemoryRepository::new();
         let muuid = mem
-            .insert(&db, InsertMemoryInput { content: "x", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "x",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();
@@ -270,7 +278,13 @@ mod tests {
         let store = SqliteVectorStore::with_db(&db, 3);
 
         let u0 = mem
-            .insert(&db, InsertMemoryInput { content: "m0", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "m0",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();
@@ -281,17 +295,29 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2, 3); 
+        assert_eq!(rows[0].2, 3);
         let decoded = blob_to_vec(&rows[0].1).unwrap();
         assert_eq!(decoded, vec![1.0_f32, 0.0, 0.0]);
 
         let u1 = mem
-            .insert(&db, InsertMemoryInput { content: "m1", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "m1",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();
         let u2 = mem
-            .insert(&db, InsertMemoryInput { content: "m2", ..Default::default() })
+            .insert(
+                &db,
+                InsertMemoryInput {
+                    content: "m2",
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .uuid();

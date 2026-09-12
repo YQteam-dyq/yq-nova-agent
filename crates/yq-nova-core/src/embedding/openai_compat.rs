@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -14,7 +13,6 @@ use crate::error::NovaResult;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenAiCompatConfig {
-
     pub base_url: String,
 
     #[serde(default)]
@@ -85,7 +83,6 @@ impl std::fmt::Debug for OpenAiCompatProvider {
 }
 
 impl OpenAiCompatProvider {
-
     pub fn new(config: OpenAiCompatConfig) -> NovaResult<Self> {
         if config.model.trim().is_empty() {
             return Err(crate::error::NovaError::validation(
@@ -115,12 +112,20 @@ impl OpenAiCompatProvider {
             model: config.model.clone(),
             dims: config.dims,
         };
-        Ok(Self { client, meta, config, endpoint })
+        Ok(Self {
+            client,
+            meta,
+            config,
+            endpoint,
+        })
     }
 
     async fn run_once(&self, texts: &[&str]) -> NovaResult<Vec<Vec<f32>>> {
-        let body =
-            EmbeddingReqBody { model: &self.config.model, input: texts, encoding_format: "float" };
+        let body = EmbeddingReqBody {
+            model: &self.config.model,
+            input: texts,
+            encoding_format: "float",
+        };
 
         let resp = with_retry(&self.config.retry, |_attempt| async {
             let mut req = self.client.post(self.endpoint.as_str()).json(&body);
@@ -193,7 +198,6 @@ impl EmbeddingProvider for OpenAiCompatProvider {
 
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(self.config.batch_size) {
-
             let refs: Vec<&str> = chunk.to_vec();
             let sub = self.run_once(&refs).await?;
             out.extend(sub);
@@ -217,19 +221,28 @@ mod tests {
 
     #[test]
     fn new_validates_required_fields() {
-        let bad = OpenAiCompatConfig { model: "  ".into(), ..OpenAiCompatConfig::default() };
+        let bad = OpenAiCompatConfig {
+            model: "  ".into(),
+            ..OpenAiCompatConfig::default()
+        };
         assert!(matches!(
             OpenAiCompatProvider::new(bad).unwrap_err().code(),
             crate::error::ErrorCode::Validation
         ));
 
-        let zero_dim = OpenAiCompatConfig { dims: 0, ..OpenAiCompatConfig::default() };
+        let zero_dim = OpenAiCompatConfig {
+            dims: 0,
+            ..OpenAiCompatConfig::default()
+        };
         assert!(matches!(
             OpenAiCompatProvider::new(zero_dim).unwrap_err().code(),
             crate::error::ErrorCode::Validation
         ));
 
-        let zero_batch = OpenAiCompatConfig { batch_size: 0, ..OpenAiCompatConfig::default() };
+        let zero_batch = OpenAiCompatConfig {
+            batch_size: 0,
+            ..OpenAiCompatConfig::default()
+        };
         assert!(matches!(
             OpenAiCompatProvider::new(zero_batch).unwrap_err().code(),
             crate::error::ErrorCode::Validation
@@ -249,5 +262,4 @@ mod tests {
         assert_eq!(p.endpoint, "https://example.com/v1/embeddings");
         assert_eq!(p.meta().provider, "openai_compat");
     }
-
 }

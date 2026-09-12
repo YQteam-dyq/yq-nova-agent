@@ -1,4 +1,3 @@
-
 use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
@@ -10,7 +9,6 @@ use crate::error::{NovaError, NovaResult};
 
 #[derive(Debug, Clone)]
 pub struct FastEmbedProviderConfig {
-
     pub model_name: String,
 
     pub dimensions: usize,
@@ -72,14 +70,9 @@ fn known_dims(model: &EmbeddingModel) -> usize {
 }
 
 impl FastEmbedProvider {
-
     pub fn new(config: FastEmbedProviderConfig) -> NovaResult<Self> {
         let model_kind = resolve_model(&config.model_name)?;
-        let dims = if config.dimensions > 0 {
-            config.dimensions
-        } else {
-            known_dims(&model_kind)
-        };
+        let dims = if config.dimensions > 0 { config.dimensions } else { known_dims(&model_kind) };
 
         let mut opts = TextInitOptions::new(model_kind);
         if !config.cache_dir.as_os_str().is_empty() {
@@ -93,7 +86,10 @@ impl FastEmbedProvider {
             model: config.model_name.clone(),
             dims,
         };
-        Ok(Self { model: Arc::new(Mutex::new(model)), meta })
+        Ok(Self {
+            model: Arc::new(Mutex::new(model)),
+            meta,
+        })
     }
 }
 

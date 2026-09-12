@@ -1,4 +1,3 @@
-
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
@@ -8,7 +7,6 @@ use crate::error::NovaResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityCandidate {
-
     pub name: String,
 
     pub entity_type: String,
@@ -59,7 +57,6 @@ fn dedupe_keep_order_by_name<T: Clone>(items: Vec<T>, key: impl Fn(&T) -> &str) 
 }
 
 fn extract_wikilinks(text: &str, out: &mut Extraction) {
-
     let bytes = text.as_bytes();
     let mut i = 0;
     while i + 3 < bytes.len() {
@@ -96,7 +93,6 @@ fn extract_wikilinks(text: &str, out: &mut Extraction) {
 }
 
 fn extract_hashtags(text: &str, out: &mut Extraction) {
-
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -133,7 +129,6 @@ fn extract_capitalised(text: &str, out: &mut Extraction) {
     let n = chars.len();
     let mut i = 0;
     while i < n {
-
         let c0 = chars[i];
         if !c0.is_ascii_uppercase() {
             i += 1;
@@ -159,7 +154,6 @@ fn extract_capitalised(text: &str, out: &mut Extraction) {
                 continue;
             }
             if last_was_space {
-
                 if c.is_ascii_uppercase() {
                     last_was_space = false;
                     word_count += 1;
@@ -225,7 +219,6 @@ fn extract_capitalised(text: &str, out: &mut Extraction) {
 }
 
 fn emit_cooccurrence_relations(out: &mut Extraction, confidence: f32) {
-
     let entities: Vec<String> = out.entities.iter().map(|e| e.name.clone()).collect();
     for (i, a) in entities.iter().enumerate() {
         for b in entities.iter().skip(i + 1) {

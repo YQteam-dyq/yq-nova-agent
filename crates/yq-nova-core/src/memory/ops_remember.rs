@@ -4,8 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::MemoryService;
-use super::chunk::{ChunkInfo, ChunkOptions, chunk_text};
+use super::{
+    MemoryService,
+    chunk::{ChunkInfo, ChunkOptions, chunk_text},
+};
 use crate::{
     error::{NovaError, NovaResult},
     graph::extractor::RelationCandidate,
@@ -88,11 +90,17 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                 for (i, ct) in chunk_texts.iter().enumerate() {
                     let chunk_meta = build_chunk_metadata(input.metadata, group_uuid, i, total);
                     let out = remember_one(
-                        svc, ct, input.tags,
+                        svc,
+                        ct,
+                        input.tags,
                         Some(&chunk_meta),
-                        input.source, input.importance,
-                        input.expires_at, input.embed, input.extract_graph,
-                    ).await?;
+                        input.source,
+                        input.importance,
+                        input.expires_at,
+                        input.embed,
+                        input.extract_graph,
+                    )
+                    .await?;
                     if i == 0 {
                         merged_tags = out.tags;
                     }
@@ -101,7 +109,11 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                     if out.embedding_stored {
                         any_embedding_stored = true;
                     }
-                    chunks.push(ChunkInfo { uuid: out.uuid, chunk_index: i, chunk_total: total });
+                    chunks.push(ChunkInfo {
+                        uuid: out.uuid,
+                        chunk_index: i,
+                        chunk_total: total,
+                    });
                 }
 
                 return Ok(RememberOutput {
@@ -118,12 +130,20 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
     }
 
     remember_one(
-        svc, content, input.tags, input.metadata,
-        input.source, input.importance,
-        input.expires_at, input.embed, input.extract_graph,
-    ).await
+        svc,
+        content,
+        input.tags,
+        input.metadata,
+        input.source,
+        input.importance,
+        input.expires_at,
+        input.embed,
+        input.extract_graph,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn remember_one(
     svc: &MemoryService,
     content: &str,
@@ -352,13 +372,16 @@ pub fn service_for_tests(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::graph::extractor::{EntityExtractor, RegexWikiExtractor};
-    use crate::storage::{Database, MemoryStatus};
-    use crate::memory::chunk::SplitBy;
     use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        graph::extractor::{EntityExtractor, RegexWikiExtractor},
+        memory::chunk::SplitBy,
+        storage::{Database, MemoryStatus},
+    };
 
     async fn temp_svc(extractor: bool) -> MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-svc-{}", Uuid::new_v4()));
@@ -381,7 +404,10 @@ mod tests {
     #[tokio::test]
     async fn empty_content_is_rejected() {
         let svc = temp_svc(false).await;
-        let bad = RememberInput { content: "   ", ..Default::default() };
+        let bad = RememberInput {
+            content: "   ",
+            ..Default::default()
+        };
         let err = svc.remember(bad).await.unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
     }
@@ -390,7 +416,11 @@ mod tests {
     async fn importance_out_of_range_rejected() {
         let svc = temp_svc(false).await;
         for bad in [-0.1_f32, 1.5, f32::NAN, f32::INFINITY] {
-            let inp = RememberInput { content: "hi", importance: bad, ..Default::default() };
+            let inp = RememberInput {
+                content: "hi",
+                importance: bad,
+                ..Default::default()
+            };
             let err = svc.remember(inp).await.unwrap_err();
             assert_eq!(err.code(), crate::error::ErrorCode::Validation);
         }
@@ -424,11 +454,17 @@ mod tests {
     async fn remember_duplicate_dedupes_same_content() {
         let svc = temp_svc(false).await;
         let a = svc
-            .remember(RememberInput { content: "shared-content", ..Default::default() })
+            .remember(RememberInput {
+                content: "shared-content",
+                ..Default::default()
+            })
             .await
             .unwrap();
         let b = svc
-            .remember(RememberInput { content: "  shared-content  ", ..Default::default() })
+            .remember(RememberInput {
+                content: "  shared-content  ",
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(a.uuid, b.uuid);
@@ -516,7 +552,10 @@ mod tests {
             if i > 0 {
                 text.push_str("\n\n");
             }
-            text.push_str(&format!("This is paragraph {} in the chunking test for the remember pipeline.", i));
+            text.push_str(&format!(
+                "This is paragraph {} in the chunking test for the remember pipeline.",
+                i
+            ));
         }
         let opts = ChunkOptions {
             enabled: true,
@@ -538,7 +577,8 @@ mod tests {
         for ci in &out.chunks {
             assert!(ci.chunk_total == out.chunks.len());
             let mem = svc.get_memory(ci.uuid).await.unwrap();
-            let chunk_group = mem.metadata.get("chunk_group").and_then(|v| v.as_str()).unwrap().to_string();
+            let chunk_group =
+                mem.metadata.get("chunk_group").and_then(|v| v.as_str()).unwrap().to_string();
             assert_eq!(chunk_group, out.uuid.to_string(), "chunk_group should match group_uuid");
             assert_eq!(
                 mem.metadata.get("chunk_index").and_then(|v| v.as_u64()).unwrap() as usize,

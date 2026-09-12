@@ -1,4 +1,3 @@
-
 use axum::{
     Json,
     extract::{Query, State},
@@ -141,7 +140,10 @@ pub async fn upsert_entity(
     };
     let outcome = repo.upsert(db, input).await?;
     let entity = repo.get_by_uuid(db, outcome.uuid()).await?;
-    Ok(Json(UpsertEntityResponse { outcome, entity }))
+    Ok(Json(UpsertEntityResponse {
+        outcome,
+        entity,
+    }))
 }
 
 pub async fn list_entities(
@@ -199,7 +201,12 @@ pub async fn upsert_relation(
 
     let inserted = matches!(outcome, InsertRelationOutcome::Inserted(_));
     let updated = matches!(outcome, InsertRelationOutcome::Updated(_));
-    Ok(Json(UpsertRelationResponse { inserted, updated, relation_uuid, relation }))
+    Ok(Json(UpsertRelationResponse {
+        inserted,
+        updated,
+        relation_uuid,
+        relation,
+    }))
 }
 
 pub async fn list_relations(
@@ -224,7 +231,6 @@ pub async fn list_relations(
         let got = repo.list_incoming(db, tgt, q.predicate.as_deref(), total_limit).await?;
         rows = got;
     } else {
-
         let ent_repo = SqliteEntityRepository::new();
         let ents = ent_repo.list(db, None, None, 50, 0).await?;
         for e in ents {

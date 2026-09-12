@@ -1,16 +1,12 @@
-
 use std::{net::SocketAddr, process::ExitCode, sync::Arc, time::Duration};
 
-use clap::builder::TypedValueParser;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
 use tracing::{error, info, warn};
-
 use yq_nova_core::{
     VERSION,
     config::Config,
     error::NovaResult,
-    graph::GraphService,
-    graph::extractor::RegexWikiExtractor,
+    graph::{GraphService, extractor::RegexWikiExtractor},
     logging,
     memory::{ForgetMode, MemoryService, SearchMode, ops_forget, ops_recall, ops_remember},
     storage::{Database, MemorySource},
@@ -30,7 +26,6 @@ use crate::http::{AppState, build_router};
     long_about = None,
 )]
 struct Cli {
-
     #[arg(short, long, env = "YQ_NOVA_CONFIG")]
     config: Option<std::path::PathBuf>,
 
@@ -40,7 +35,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-
     Serve,
 
     Check,
@@ -60,7 +54,6 @@ enum Commands {
 
 #[derive(Debug, Args)]
 struct RememberArgs {
-
     #[arg(required_unless_present = "content")]
     content_pos: Option<String>,
 
@@ -141,7 +134,6 @@ impl From<SearchModeCli> for SearchMode {
 
 #[derive(Debug, Args)]
 struct RecallArgs {
-
     query: String,
 
     #[arg(long, default_value_t = 10)]
@@ -165,7 +157,6 @@ struct RecallArgs {
 
 #[derive(Debug, Args)]
 struct ForgetArgs {
-
     #[arg(long)]
     uuid: Option<String>,
 
@@ -225,7 +216,6 @@ async fn main() -> ExitCode {
     let exit_code = match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-
             eprintln!("fatal: {e:#}");
             error!(error = %e, "yq-nova exited with error");
             ExitCode::FAILURE
@@ -239,7 +229,6 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> NovaResult<()> {
-
     let cli = Cli::parse();
     if let Some(path) = &cli.config {
         std::env::set_var("YQ_NOVA_CONFIG", path);
@@ -259,7 +248,6 @@ async fn run() -> NovaResult<()> {
     let cmd = cli.command.unwrap_or(Commands::Serve);
     match cmd {
         Commands::ConfigShow => {
-
             let mut buf = Vec::new();
             cfg.save_to_temp(&mut buf)?;
             let s = String::from_utf8(buf)
@@ -404,7 +392,8 @@ async fn run() -> NovaResult<()> {
                 );
             } else {
                 println!(
-                    "affected_memories={aff} cascade_embeddings={casc} gc_entities={ge} gc_relations={gr}",
+                    "affected_memories={aff} cascade_embeddings={casc} gc_entities={ge} \
+                     gc_relations={gr}",
                     aff = out.affected_memories,
                     casc = out.cascade_embeddings,
                     ge = out.gc_entities,
@@ -475,9 +464,9 @@ async fn run() -> NovaResult<()> {
             );
             if provider_name == "mock" {
                 tracing::warn!(
-                    "embedding provider is 'mock' — semantic search will be deterministic \
-                     only by importance/access, not semantics. Set YQ_NOVA_EMBEDDING__DEFAULT_PROVIDER \
-                     or config.embedding.default_provider to a real name for production."
+                    "embedding provider is 'mock' — semantic search will be deterministic only by \
+                     importance/access, not semantics. Set YQ_NOVA_EMBEDDING__DEFAULT_PROVIDER or \
+                     config.embedding.default_provider to a real name for production."
                 );
             }
 
@@ -512,7 +501,7 @@ async fn run() -> NovaResult<()> {
                 .await
                 .map_err(|e| yq_nova_core::NovaError::internal_with_ctx("bind tcp", e))?;
 
-            let _ = Duration::from_secs(60); 
+            let _ = Duration::from_secs(60);
             axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     let _ = wait_for_shutdown_signal().await;
@@ -555,8 +544,8 @@ async fn open_core_services(
         provider_wiring::build_registry(&cfg.embedding)?;
     if provider_name == "mock" {
         warn!(
-            "embedding provider is 'mock' — semantic search will be deterministic \
-             only by importance/access, not semantics."
+            "embedding provider is 'mock' — semantic search will be deterministic only by \
+             importance/access, not semantics."
         );
     }
     let memory = MemoryService::new(db.clone(), provider.clone());
