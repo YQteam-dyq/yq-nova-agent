@@ -1,11 +1,25 @@
-<!-- 提交 PR 时请尽量填写以下内容，方便 review 和回溯。 -->
-## 变更内容
-<!-- 简要描述这个 PR 做了什么，为什么需要它。 -->
-## 关联 Issue
-<!-- 例如 Closes #12 -->
-## 变更类型
-<!-- feat / fix / refactor / docs / chore -->
-## 自测情况
-<!-- 执行的命令、测试结果或截图 -->
-## 检查清单
-<!-- 本地已跑通构建与测试；相关文档已更新；改动范围尽量小 -->
+<!-- Fill in the sections below when you open a pull request. They make review and traceability easier. -->
+
+## What changed
+
+<!-- Briefly describe what this pull request does and why it is needed. -->
+
+## Related issue
+
+<!-- For example: Closes #12 -->
+
+## Type of change
+
+<!-- feat / fix / refactor / docs / chore / ci -->
+
+## How it was tested
+
+<!-- The commands you ran, the test results, or screenshots. -->
+
+## Checklist
+
+- [ ] The pull request title and description are written in English.
+- [ ] Every added line is written in English, including code comments and log messages.
+- [ ] Build, lint and tests pass locally.
+- [ ] Documentation has been updated where relevant.
+- [ ] The change is focused and the diff is as small as it can be.
