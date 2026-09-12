@@ -166,7 +166,7 @@ pub async fn delete_memory(
     Ok(Json(out))
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UpdateMemoryRequest {
     pub content: Option<String>,
@@ -174,18 +174,6 @@ pub struct UpdateMemoryRequest {
     pub metadata: Option<serde_json::Value>,
     pub tags: Option<Vec<String>>,
     pub expires_at: Option<Option<chrono::DateTime<Utc>>>,
-}
-
-impl Default for UpdateMemoryRequest {
-    fn default() -> Self {
-        Self {
-            content: None,
-            importance: None,
-            metadata: None,
-            tags: None,
-            expires_at: None,
-        }
-    }
 }
 
 pub async fn update_memory(

@@ -39,14 +39,14 @@ pub async fn auth_middleware(
 
     let candidate = provided
         .as_deref()
-        .and_then(|v| {
+        .map(|v| {
             let trimmed = v.trim();
             if let Some(rest) = trimmed.strip_prefix("Bearer ") {
-                Some(rest.trim())
+                rest.trim()
             } else if let Some(rest) = trimmed.strip_prefix("bearer ") {
-                Some(rest.trim())
+                rest.trim()
             } else {
-                Some(trimmed)
+                trimmed
             }
         })
         .unwrap_or("");

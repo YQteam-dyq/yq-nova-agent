@@ -167,8 +167,7 @@ impl EmbeddedNova {
                 expires_at: i.expires_at,
             })
             .collect();
-        let on_conflict =
-            if req.on_conflict == "skip" { ConflictStrategy::Skip } else { ConflictStrategy::Skip };
+        let on_conflict = ConflictStrategy::Skip;
         let input = ImportInput {
             items,
             embed: req.embed,
