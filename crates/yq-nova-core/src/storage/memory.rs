@@ -470,6 +470,21 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
         out
     }
 
+    if let Some(tags) = &filter.tags_all {
+        if !tags.is_empty() {
+            for t in tags {
+                binds.push(BindValue::Text(t.clone()));
+            }
+            joins.push_str(&format!(
+                " INNER JOIN memory_tags mta ON mta.memory_uuid = m.uuid INNER JOIN tags ta ON \
+                 ta.id = mta.tag_id AND ta.name IN ({})",
+                qmarks(tags.len())
+            ));
+            group_by_having =
+                Some(format!("GROUP BY m.id HAVING COUNT(DISTINCT ta.name) = {}", tags.len()));
+        }
+    }
+
     if let Some(statuses) = &filter.status_in {
         if !statuses.is_empty() {
             for s in statuses {
@@ -517,21 +532,6 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
     if let Some(after) = filter.last_accessed_after {
         binds.push(BindValue::Int(after.timestamp()));
         where_clauses.push("COALESCE(m.last_accessed, m.created_at) > ?".into());
-    }
-
-    if let Some(tags) = &filter.tags_all {
-        if !tags.is_empty() {
-            for t in tags {
-                binds.push(BindValue::Text(t.clone()));
-            }
-            joins.push_str(&format!(
-                " INNER JOIN memory_tags mta ON mta.memory_uuid = m.uuid INNER JOIN tags ta ON \
-                 ta.id = mta.tag_id AND ta.name IN ({})",
-                qmarks(tags.len())
-            ));
-            group_by_having =
-                Some(format!("GROUP BY m.id HAVING COUNT(DISTINCT ta.name) = {}", tags.len()));
-        }
     }
 
     if let Some(tags) = &filter.tags_any {
@@ -884,5 +884,45 @@ mod tests {
             repo.update_importance(&db, uuid, -0.1).await.unwrap_err().code(),
             crate::error::ErrorCode::Validation
         );
+    }
+
+    #[tokio::test]
+    async fn list_and_count_bind_tag_joins_ahead_of_status_filters() {
+        let db = temp_db().await;
+        let repo = SqliteMemoryRepository::new();
+        for (name, src, imp, tag) in [
+            ("a", MemorySource::Agent, 0.5, "tag-a"),
+            ("b", MemorySource::User, 0.9, "tag-a"),
+            ("c", MemorySource::Tool, 0.1, "tag-b"),
+        ] {
+            repo.insert(
+                &db,
+                InsertMemoryInput {
+                    content: name,
+                    source: src,
+                    importance: imp,
+                    tags: &[tag.to_string()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let f = MemoryFilter {
+            status_in: Some(vec![MemoryStatus::Active, MemoryStatus::Archived]),
+            tags_all: Some(vec!["tag-a".into()]),
+            ..Default::default()
+        };
+        assert_eq!(repo.count(&db, &f).await.unwrap(), 2);
+        assert_eq!(repo.list(&db, &f, 100, 0).await.unwrap().len(), 2);
+
+        let f2 = MemoryFilter {
+            status_in: Some(vec![MemoryStatus::Active]),
+            tags_all: Some(vec!["tag-a".into(), "tag-b".into()]),
+            ..Default::default()
+        };
+        assert_eq!(repo.count(&db, &f2).await.unwrap(), 0);
+        assert_eq!(repo.list(&db, &f2, 100, 0).await.unwrap().len(), 0);
     }
 }
