@@ -16,4 +16,5 @@ pub use yq_nova_core::{
         ListOutput, MergeInput, MergeOutput, SplitBy, TagDeleteInput, TagDeleteOutput,
         TagListInput, TagListOutput, TagRenameInput, TagRenameOutput, UpdateInput,
     },
+    storage::{MemoryFilter, MemorySortOrder},
 };
