@@ -136,13 +136,24 @@ mod tests {
 
     #[test]
     fn chunk_options_validation() {
-        let opts = ChunkOptions { max_chars: 100, ..Default::default() };
+        let opts = ChunkOptions {
+            max_chars: 100,
+            ..Default::default()
+        };
         assert!(opts.validate().is_err());
 
-        let opts = ChunkOptions { max_chars: 200, overlap_chars: 200, ..Default::default() };
+        let opts = ChunkOptions {
+            max_chars: 200,
+            overlap_chars: 200,
+            ..Default::default()
+        };
         assert!(opts.validate().is_err());
 
-        let opts = ChunkOptions { max_chars: 200, overlap_chars: 150, ..Default::default() };
+        let opts = ChunkOptions {
+            max_chars: 200,
+            overlap_chars: 150,
+            ..Default::default()
+        };
         assert!(opts.validate().is_ok());
     }
 
@@ -167,7 +178,11 @@ mod tests {
             if i > 0 {
                 text.push_str("\n\n");
             }
-            text.push_str(&format!("This is paragraph number {} with some filler text to make it reasonably long so that we can test chunking behavior correctly.", i));
+            text.push_str(&format!(
+                "This is paragraph number {} with some filler text to make it reasonably long so \
+                 that we can test chunking behavior correctly.",
+                i
+            ));
         }
         let opts = ChunkOptions {
             enabled: true,
@@ -241,10 +256,12 @@ mod tests {
         let chunks = chunk_text(text, &opts);
         assert!(chunks.len() >= 2);
         if chunks.len() >= 2 {
-            assert!(chunks[1].starts_with(&chunks[0][chunks[0].len() - 3..]),
+            assert!(
+                chunks[1].starts_with(&chunks[0][chunks[0].len() - 3..]),
                 "chunk[1] should start with the last 3 chars of chunk[0]: {:?} vs {:?}",
                 &chunks[1][..3.min(chunks[1].len())],
-                &chunks[0][chunks[0].len() - 3..]);
+                &chunks[0][chunks[0].len() - 3..]
+            );
         }
     }
 
@@ -267,8 +284,11 @@ mod tests {
         let chunks = chunk_text(text, &opts);
         assert!(chunks.len() > 1, "should produce multiple chunks, got {}", chunks.len());
         if chunks.len() >= 2 {
-            assert!(chunks[1].contains("Paragraph"),
-                "overlap should carry over text: {:?}", chunks[1]);
+            assert!(
+                chunks[1].contains("Paragraph"),
+                "overlap should carry over text: {:?}",
+                chunks[1]
+            );
         }
     }
 }

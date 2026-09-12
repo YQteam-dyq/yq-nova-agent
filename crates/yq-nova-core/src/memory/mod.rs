@@ -1,4 +1,3 @@
-
 pub mod chunk;
 pub mod ops_export;
 pub mod ops_forget;
@@ -9,6 +8,8 @@ pub mod ops_remember;
 pub mod ops_update;
 pub mod rank;
 
+use std::sync::Arc;
+
 pub use chunk::{ChunkInfo, ChunkOptions, SplitBy};
 pub use ops_export::{ExportInput, ExportOutput};
 pub use ops_forget::{ForgetInput, ForgetMode, ForgetOutput};
@@ -18,9 +19,6 @@ pub use ops_recall::{RecallHit, RecallInput, RecallOutput};
 pub use ops_remember::{RememberInput, RememberOutput};
 pub use ops_update::UpdateInput;
 pub use rank::RankWeights;
-
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -44,7 +42,6 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
-
     #[default]
     Semantic,
 
@@ -56,7 +53,6 @@ pub enum SearchMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HybridWeights {
-
     pub semantic: f32,
 
     pub keyword: f32,
@@ -66,14 +62,17 @@ pub struct HybridWeights {
 
 impl Default for HybridWeights {
     fn default() -> Self {
-        Self { semantic: 0.6, keyword: 0.3, graph: 0.1 }
+        Self {
+            semantic: 0.6,
+            keyword: 0.3,
+            graph: 0.1,
+        }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GraphTraversalOpts {
-
     pub enabled: bool,
 
     pub max_depth: u8,
@@ -83,7 +82,6 @@ pub struct GraphTraversalOpts {
 
 #[derive(Clone)]
 pub struct MemoryService {
-
     pub database: Database,
 
     pub embedding: SharedEmbeddingProvider,
@@ -112,7 +110,6 @@ impl std::fmt::Debug for MemoryService {
 }
 
 impl MemoryService {
-
     pub fn with_parts(
         database: Database,
         embedding: SharedEmbeddingProvider,
@@ -175,18 +172,11 @@ impl MemoryService {
         ops_import::import_memories(self, input).await
     }
 
-    pub async fn merge(
-        &self,
-        input: ops_merge::MergeInput,
-    ) -> NovaResult<ops_merge::MergeOutput> {
+    pub async fn merge(&self, input: ops_merge::MergeInput) -> NovaResult<ops_merge::MergeOutput> {
         ops_merge::merge_memories(self, input).await
     }
 
-    pub async fn update(
-        &self,
-        uuid: uuid::Uuid,
-        input: UpdateInput,
-    ) -> NovaResult<MemoryRecord> {
+    pub async fn update(&self, uuid: uuid::Uuid, input: UpdateInput) -> NovaResult<MemoryRecord> {
         ops_update::update_memory(self, uuid, input).await
     }
 

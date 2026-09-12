@@ -1,4 +1,3 @@
-
 #![cfg(feature = "sqlite-vec")]
 
 use std::sync::{Arc, Once};
@@ -6,13 +5,14 @@ use std::sync::{Arc, Once};
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::{NovaError, NovaResult};
-use crate::storage::vector::{
-    check_dims, vec_to_blob, VectorHit, VectorStore,
+use crate::{
+    error::{NovaError, NovaResult},
+    storage::vector::{VectorHit, VectorStore, check_dims, vec_to_blob},
 };
 
 unsafe extern "C" {
-    fn sqlite3_auto_extension(x_entry_point: Option<unsafe extern "C" fn()>) -> std::os::raw::c_int;
+    fn sqlite3_auto_extension(x_entry_point: Option<unsafe extern "C" fn()>)
+    -> std::os::raw::c_int;
 }
 
 fn register_sqlite_vec_once() -> NovaResult<()> {
@@ -52,20 +52,19 @@ pub struct SqliteVecVectorStore {
 
 impl std::fmt::Debug for SqliteVecVectorStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqliteVecVectorStore")
-            .field("dims", &self.dims)
-            .finish_non_exhaustive()
+        f.debug_struct("SqliteVecVectorStore").field("dims", &self.dims).finish_non_exhaustive()
     }
 }
 
 impl SqliteVecVectorStore {
-
     pub const TABLE: &'static str = "vec_embeddings";
 
     pub fn new(pool: sqlx::SqlitePool, dims: usize) -> Self {
-
         let _ = register_sqlite_vec_once();
-        Self { pool, dims }
+        Self {
+            pool,
+            dims,
+        }
     }
 
     pub fn with_db(db: &crate::storage::Database, dims: usize) -> Self {
@@ -75,7 +74,8 @@ impl SqliteVecVectorStore {
     pub async fn init(&self) -> NovaResult<()> {
         register_sqlite_vec_once()?;
         sqlx::query(&format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS {} USING vec0(embedding float[{}], memory_uuid TEXT)",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS {} USING vec0(embedding float[{}], memory_uuid \
+             TEXT)",
             Self::TABLE,
             self.dims
         ))
@@ -162,7 +162,8 @@ impl VectorStore for SqliteVecVectorStore {
         let blob = vec_to_blob(query);
 
         let rows: Vec<(String, f64)> = sqlx::query_as(&format!(
-            "SELECT memory_uuid, distance FROM {} WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+            "SELECT memory_uuid, distance FROM {} WHERE embedding MATCH ?1 ORDER BY distance \
+             LIMIT ?2",
             Self::TABLE
         ))
         .bind(blob)
@@ -176,7 +177,10 @@ impl VectorStore for SqliteVecVectorStore {
             let sim = l2_distance_to_cosine(d as f32);
             if sim >= threshold {
                 if let Ok(mem_uuid) = Uuid::parse_str(&mem_s) {
-                    hits.push(VectorHit { memory_uuid: mem_uuid, similarity: sim });
+                    hits.push(VectorHit {
+                        memory_uuid: mem_uuid,
+                        similarity: sim,
+                    });
                 }
             }
         }
@@ -193,10 +197,9 @@ pub type SharedVectorStore = Arc<dyn VectorStore>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StorageConfig;
-    use crate::storage::{
-        Database,
-        vector::SqliteVectorStore,
+    use crate::{
+        config::StorageConfig,
+        storage::{Database, vector::SqliteVectorStore},
     };
 
     async fn temp_db() -> Database {

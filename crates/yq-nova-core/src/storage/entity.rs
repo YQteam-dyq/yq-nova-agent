@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,7 +11,6 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityRecord {
-
     pub id: i64,
 
     pub uuid: Uuid,
@@ -32,7 +30,6 @@ pub struct EntityRecord {
 
 #[derive(Debug, Clone)]
 pub struct UpsertEntityInput<'a> {
-
     pub name: &'a str,
 
     pub r#type: &'a str,
@@ -45,7 +42,6 @@ pub struct UpsertEntityInput<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", content = "uuid", rename_all = "snake_case")]
 pub enum UpsertOutcome {
-
     Created(Uuid),
 
     Updated(Uuid),
@@ -61,7 +57,6 @@ impl UpsertOutcome {
 
 #[async_trait]
 pub trait EntityRepository: Repository<EntityRecord> {
-
     async fn upsert(
         &self,
         db: &Database,
@@ -134,8 +129,8 @@ impl EntityRepository for SqliteEntityRepository {
         let metadata_json = input.metadata.cloned().unwrap_or_else(|| serde_json::json!({}));
 
         let existing: Option<(i64, String, Option<String>, String)> = sqlx::query_as(
-            "SELECT id, uuid, description, metadata_json FROM entities \
-             WHERE name = ?1 AND type = ?2",
+            "SELECT id, uuid, description, metadata_json FROM entities WHERE name = ?1 AND type = \
+             ?2",
         )
         .bind(name)
         .bind(r#type)
@@ -150,13 +145,12 @@ impl EntityRepository for SqliteEntityRepository {
             let new_meta = if input.metadata.is_some() {
                 &metadata_json
             } else {
-
                 &serde_json::from_str::<serde_json::Value>(&existing_meta_s)
                     .map_err(|e| NovaError::storage_msg(format!("bad meta: {e}")))?
             };
             sqlx::query(
-                "UPDATE entities SET description = ?1, metadata_json = ?2, updated_at = ?3 \
-                 WHERE uuid = ?4",
+                "UPDATE entities SET description = ?1, metadata_json = ?2, updated_at = ?3 WHERE \
+                 uuid = ?4",
             )
             .bind(new_desc)
             .bind(new_meta.to_string())
@@ -170,8 +164,8 @@ impl EntityRepository for SqliteEntityRepository {
 
         let uuid = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO entities (uuid, name, type, description, metadata_json, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO entities (uuid, name, type, description, metadata_json, created_at, \
+             updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(uuid.to_string())
         .bind(name)
@@ -188,8 +182,8 @@ impl EntityRepository for SqliteEntityRepository {
 
     async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<EntityRecord> {
         let row = sqlx::query(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at \
-             FROM entities WHERE uuid = ?1",
+            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
+             entities WHERE uuid = ?1",
         )
         .bind(uuid.to_string())
         .fetch_optional(&db.pool)
@@ -206,8 +200,8 @@ impl EntityRepository for SqliteEntityRepository {
         r#type: &str,
     ) -> NovaResult<Option<EntityRecord>> {
         let row = sqlx::query(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at \
-             FROM entities WHERE name = ?1 AND type = ?2",
+            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
+             entities WHERE name = ?1 AND type = ?2",
         )
         .bind(name)
         .bind(r#type)
@@ -232,18 +226,11 @@ impl EntityRepository for SqliteEntityRepository {
         Ok(())
     }
 
-    async fn find_by_name(
-        &self,
-        db: &Database,
-        name: &str,
-    ) -> NovaResult<Vec<EntityRecord>> {
-        let sql = "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at \
-                   FROM entities WHERE LOWER(name) = LOWER(?1) ORDER BY updated_at DESC";
-        let rows = sqlx::query(sql)
-            .bind(name)
-            .fetch_all(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
+    async fn find_by_name(&self, db: &Database, name: &str) -> NovaResult<Vec<EntityRecord>> {
+        let sql = "SELECT id, uuid, name, type, description, metadata_json, created_at, \
+                   updated_at FROM entities WHERE LOWER(name) = LOWER(?1) ORDER BY updated_at DESC";
+        let rows =
+            sqlx::query(sql).bind(name).fetch_all(&db.pool).await.map_err(NovaError::storage)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(row_to_entity(&row)?);
@@ -274,8 +261,8 @@ impl EntityRepository for SqliteEntityRepository {
         let limit = limit.min(10_000) as i64;
         let offset = offset as i64;
         let sql = format!(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at \
-             FROM entities {wc} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
+             entities {wc} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         );
         let mut q = sqlx::query(&sql);
         if let Some(np) = name_prefix {
@@ -334,7 +321,6 @@ pub enum Direction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraverseNode {
-
     pub entity: EntityRecord,
 
     pub depth: u8,
@@ -384,8 +370,8 @@ mod tests {
                 UpsertEntityInput {
                     name: "Alice",
                     r#type: "person",
-                    description: None, 
-                    metadata: None,    
+                    description: None,
+                    metadata: None,
                 },
             )
             .await
@@ -405,7 +391,12 @@ mod tests {
         let err = repo
             .upsert(
                 &db,
-                UpsertEntityInput { name: "  ", r#type: "x", description: None, metadata: None },
+                UpsertEntityInput {
+                    name: "  ",
+                    r#type: "x",
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap_err();
@@ -413,7 +404,12 @@ mod tests {
         let err2 = repo
             .upsert(
                 &db,
-                UpsertEntityInput { name: "x", r#type: "", description: None, metadata: None },
+                UpsertEntityInput {
+                    name: "x",
+                    r#type: "",
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap_err();
@@ -435,7 +431,12 @@ mod tests {
         for (n, t) in [("Alice", "person"), ("Alex", "person"), ("Bob", "org")] {
             repo.upsert(
                 &db,
-                UpsertEntityInput { name: n, r#type: t, description: None, metadata: None },
+                UpsertEntityInput {
+                    name: n,
+                    r#type: t,
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap();

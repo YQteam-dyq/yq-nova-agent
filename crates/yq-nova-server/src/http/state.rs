@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use yq_nova_core::{
@@ -24,7 +23,13 @@ impl AppState {
         graph: GraphService,
     ) -> Self {
         let started_at_epoch_secs = chrono::Utc::now().timestamp();
-        Self { server_cfg, db, memory, graph, started_at_epoch_secs }
+        Self {
+            server_cfg,
+            db,
+            memory,
+            graph,
+            started_at_epoch_secs,
+        }
     }
 }
 

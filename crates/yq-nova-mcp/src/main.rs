@@ -5,15 +5,17 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tracing_subscriber::EnvFilter;
-use yq_nova_core::config::StorageConfig;
-use yq_nova_core::embedding::MockEmbeddingProvider;
-use yq_nova_core::graph::{GraphService, TraverseOpts};
-use yq_nova_core::memory::{
-    ForgetInput, ForgetMode, MemoryService, ops_forget::ForgetTarget, ops_recall::RecallInput,
-    ops_remember::RememberInput, ops_update::UpdateInput,
+use yq_nova_core::{
+    Uuid,
+    config::StorageConfig,
+    embedding::MockEmbeddingProvider,
+    graph::{GraphService, TraverseOpts},
+    memory::{
+        ForgetInput, ForgetMode, MemoryService, ops_forget::ForgetTarget, ops_recall::RecallInput,
+        ops_remember::RememberInput, ops_update::UpdateInput,
+    },
+    storage::{Database, MemoryFilter, MemoryRepository, MemoryStatus, SqliteMemoryRepository},
 };
-use yq_nova_core::storage::{Database, MemoryFilter, MemoryRepository, MemoryStatus, SqliteMemoryRepository};
-use yq_nova_core::Uuid;
 
 #[derive(Parser)]
 #[command(name = "yq-nova-mcp", version = "0.3.0")]
@@ -86,11 +88,14 @@ async fn main() -> Result<()> {
                     jsonrpc: "2.0".into(),
                     id: None,
                     result: None,
-                    error: Some(JsonRpcError { code: -32700, message: e.to_string() }),
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: e.to_string(),
+                    }),
                 };
                 println!("{}", serde_json::to_string(&resp)?);
                 continue;
-            }
+            },
         };
 
         let id = req.id.clone().unwrap_or(serde_json::Value::Null);
@@ -133,25 +138,34 @@ async fn handle_request(
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "yq-nova-mcp", "version": "0.3.0" }
             });
-            HandlerResult { result: Some(result), error: None }
-        }
-        "notifications/initialized" => HandlerResult { result: None, error: None },
+            HandlerResult {
+                result: Some(result),
+                error: None,
+            }
+        },
+        "notifications/initialized" => HandlerResult {
+            result: None,
+            error: None,
+        },
         "tools/list" => {
             let result = serde_json::json!({ "tools": tools });
-            HandlerResult { result: Some(result), error: None }
-        }
+            HandlerResult {
+                result: Some(result),
+                error: None,
+            }
+        },
         "tools/call" => {
             let params = req.params.unwrap_or(serde_json::Value::Null);
-            let name = params
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
             handle_tool_call(name, &args, memory, graph).await
-        }
+        },
         _ => HandlerResult {
             result: None,
-            error: Some(JsonRpcError { code: -32601, message: format!("Method not found: {}", req.method) }),
+            error: Some(JsonRpcError {
+                code: -32601,
+                message: format!("Method not found: {}", req.method),
+            }),
         },
     }
 }
@@ -176,8 +190,8 @@ async fn handle_tool_call(
                     code: -32601,
                     message: format!("Unknown tool: {}", name),
                 }),
-            }
-        }
+            };
+        },
     };
 
     match result {
@@ -189,7 +203,7 @@ async fn handle_tool_call(
                 })),
                 error: None,
             }
-        }
+        },
         Err(e) => HandlerResult {
             result: Some(serde_json::json!({
                 "isError": true,
@@ -200,7 +214,10 @@ async fn handle_tool_call(
     }
 }
 
-async fn tool_remember(args: &serde_json::Value, memory: &MemoryService) -> Result<serde_json::Value> {
+async fn tool_remember(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> Result<serde_json::Value> {
     let content = args
         .get("content")
         .and_then(|v| v.as_str())
@@ -232,7 +249,10 @@ async fn tool_remember(args: &serde_json::Value, memory: &MemoryService) -> Resu
     }))
 }
 
-async fn tool_recall(args: &serde_json::Value, memory: &MemoryService) -> anyhow::Result<serde_json::Value> {
+async fn tool_recall(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> anyhow::Result<serde_json::Value> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -256,7 +276,10 @@ async fn tool_recall(args: &serde_json::Value, memory: &MemoryService) -> anyhow
     Ok(serde_json::to_value(out)?)
 }
 
-async fn tool_forget(args: &serde_json::Value, memory: &MemoryService) -> anyhow::Result<serde_json::Value> {
+async fn tool_forget(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> anyhow::Result<serde_json::Value> {
     let uuid_str = args
         .get("uuid")
         .and_then(|v| v.as_str())
@@ -278,7 +301,10 @@ async fn tool_forget(args: &serde_json::Value, memory: &MemoryService) -> anyhow
     Ok(serde_json::to_value(out)?)
 }
 
-async fn tool_update(args: &serde_json::Value, memory: &MemoryService) -> anyhow::Result<serde_json::Value> {
+async fn tool_update(
+    args: &serde_json::Value,
+    memory: &MemoryService,
+) -> anyhow::Result<serde_json::Value> {
     let uuid_str = args
         .get("uuid")
         .and_then(|v| v.as_str())
@@ -346,7 +372,10 @@ async fn tool_stats(memory: &MemoryService, graph: &GraphService) -> Result<serd
     }))
 }
 
-async fn tool_traverse(args: &serde_json::Value, graph: &GraphService) -> anyhow::Result<serde_json::Value> {
+async fn tool_traverse(
+    args: &serde_json::Value,
+    graph: &GraphService,
+) -> anyhow::Result<serde_json::Value> {
     let uuid_str = args
         .get("start_uuid")
         .and_then(|v| v.as_str())
@@ -387,7 +416,8 @@ fn build_tool_list() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "nova_recall".into(),
-            description: "Search memories by semantic query with optional entity focus and mode".into(),
+            description: "Search memories by semantic query with optional entity focus and mode"
+                .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -413,7 +443,8 @@ fn build_tool_list() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "nova_memory_update".into(),
-            description: "Update an existing memory's content, importance, metadata, or tags".into(),
+            description: "Update an existing memory's content, importance, metadata, or tags"
+                .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {

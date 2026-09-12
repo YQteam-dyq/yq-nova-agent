@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 
 use crate::{
@@ -37,7 +36,6 @@ impl SqliteFts5Store {
 }
 
 impl SqliteFts5Store {
-
     fn normalise_query(q: &str) -> String {
         let trimmed = q.trim();
         if trimmed.is_empty() {
@@ -63,7 +61,6 @@ impl SqliteFts5Store {
         tokens
             .iter()
             .map(|t| {
-
                 if t.chars().any(|c| matches!(c, '-' | '+' | '^' | ':' | '*' | '"' | '(' | ')')) {
                     let escaped = t.replace('"', "\"\"");
                     format!("\"{escaped}\"*")
@@ -138,11 +135,14 @@ impl Fts5Store for SqliteFts5Store {
                 let norm = if range <= 0.0 {
                     1.0f32
                 } else {
-
                     let r: f32 = 1.0 - (b - min_bm) / range;
                     r.clamp(0.0_f32, 1.0_f32)
                 };
-                KeywordHit { uuid, score: norm, raw_bm25: b }
+                KeywordHit {
+                    uuid,
+                    score: norm,
+                    raw_bm25: b,
+                }
             })
             .collect();
         Ok(hits)
@@ -151,6 +151,8 @@ impl Fts5Store for SqliteFts5Store {
 
 #[cfg(test)]
 mod tests {
+    use std::{path::PathBuf, sync::Arc, time::SystemTime};
+
     use super::*;
     use crate::{
         config::StorageConfig,
@@ -158,7 +160,6 @@ mod tests {
         memory::{MemoryService, RememberInput},
         storage::Database,
     };
-    use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
     fn tmp(tag: &str) -> StorageConfig {
         let mut p = std::env::temp_dir();
@@ -193,12 +194,18 @@ mod tests {
     #[tokio::test]
     async fn fts_matches_prefix_and_multitoken() {
         let (db, mem, store) = setup().await;
-        mem.remember(RememberInput { content: "pineapple smoothie recipe", ..Default::default() })
-            .await
-            .unwrap();
-        mem.remember(RememberInput { content: "banana smoothie bowl", ..Default::default() })
-            .await
-            .unwrap();
+        mem.remember(RememberInput {
+            content: "pineapple smoothie recipe",
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        mem.remember(RememberInput {
+            content: "banana smoothie bowl",
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         mem.remember(RememberInput {
             content: "unrelated rust code snippet",
             ..Default::default()
@@ -229,14 +236,22 @@ mod tests {
     #[tokio::test]
     async fn fts_filters_by_status() {
         let (db, mem, store) = setup().await;
-        mem.remember(RememberInput { content: "archived note", ..Default::default() })
-            .await
-            .unwrap();
+        mem.remember(RememberInput {
+            content: "archived note",
+            ..Default::default()
+        })
+        .await
+        .unwrap();
         sqlx::query("UPDATE memory_items SET status = 'archived' WHERE content = 'archived note'")
             .execute(&db.pool)
             .await
             .unwrap();
-        mem.remember(RememberInput { content: "active note", ..Default::default() }).await.unwrap();
+        mem.remember(RememberInput {
+            content: "active note",
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
         let only_active =
             store.keyword_search(&db, "note", 10, &[MemoryStatus::Active]).await.unwrap();

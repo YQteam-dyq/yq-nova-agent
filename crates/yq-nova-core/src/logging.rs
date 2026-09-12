@@ -1,7 +1,14 @@
-
 use std::{path::Path, sync::OnceLock};
 
+#[cfg(feature = "otel")]
+use opentelemetry::trace::TracerProvider as _;
+#[cfg(feature = "otel")]
+use opentelemetry_otlp::WithExportConfig;
 use tracing::Dispatch;
+#[cfg(feature = "otel")]
+use tracing_subscriber::layer::Identity;
+#[cfg(feature = "otel")]
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{
     EnvFilter, Layer,
     filter::{Directive, LevelFilter},
@@ -14,15 +21,6 @@ use crate::{
     config::LoggingConfig,
     error::{NovaError, NovaResult},
 };
-
-#[cfg(feature = "otel")]
-use opentelemetry::trace::TracerProvider as _;
-#[cfg(feature = "otel")]
-use opentelemetry_otlp::WithExportConfig;
-#[cfg(feature = "otel")]
-use tracing_subscriber::layer::Identity;
-#[cfg(feature = "otel")]
-use tracing_subscriber::registry::LookupSpan;
 
 static GLOBAL_TRACE_ID: OnceLock<String> = OnceLock::new();
 
@@ -94,14 +92,11 @@ pub fn current_dispatch() -> Dispatch {
 }
 
 #[cfg(feature = "otel")]
-pub fn init_otel_layer<S>(
-    cfg: &LoggingConfig,
-) -> NovaResult<Box<dyn Layer<S> + Send + Sync>>
+pub fn init_otel_layer<S>(cfg: &LoggingConfig) -> NovaResult<Box<dyn Layer<S> + Send + Sync>>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,
 {
     if !cfg.otel_enabled {
-
         return Ok(Box::new(Identity::default()));
     }
 
@@ -109,9 +104,7 @@ where
         .with_http()
         .with_endpoint(cfg.otel_endpoint.clone())
         .build()
-        .map_err(|e| {
-            NovaError::config_msg(format!("failed to build OTLP span exporter: {e}"))
-        })?;
+        .map_err(|e| NovaError::config_msg(format!("failed to build OTLP span exporter: {e}")))?;
 
     let provider = opentelemetry_sdk::trace::TracerProvider::builder()
         .with_sampler(opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(
@@ -133,7 +126,6 @@ pub fn shutdown_otel() {
 }
 
 fn build_env_filter(cfg: &LoggingConfig) -> EnvFilter {
-
     let from_env = std::env::var_os("YQ_NOVA_LOG")
         .or_else(|| std::env::var_os("RUST_LOG"))
         .and_then(|s| s.into_string().ok());
@@ -151,7 +143,6 @@ fn build_env_filter(cfg: &LoggingConfig) -> EnvFilter {
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy()
         .add_directive(base)
-
         .add_directive("hyper=warn".parse().unwrap())
         .add_directive("rustls=warn".parse().unwrap())
         .add_directive("reqwest=warn".parse().unwrap())
@@ -195,7 +186,6 @@ mod tests {
 
     #[test]
     fn parse_level_aliases() {
-
         let _ = init_tracing(&LoggingConfig::default());
         assert_eq!(parse_level("TRACE"), Directive::from(LevelFilter::TRACE));
         assert_eq!(parse_level("error"), Directive::from(LevelFilter::ERROR));

@@ -1,4 +1,3 @@
-
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hasher},
@@ -35,7 +34,6 @@ impl MiniRng {
 
         let reject_threshold = u64::MAX - ((u64::MAX - width + 1) % width);
         loop {
-
             let mut x = self.0;
             x ^= x >> 12;
             x ^= x << 25;
@@ -57,7 +55,6 @@ pub enum RetryAction {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RetryConfig {
-
     pub max_attempts: u32,
 
     #[serde(with = "crate::config::duration_seconds")]
@@ -128,8 +125,9 @@ pub fn classify_http_status(status: reqwest::StatusCode) -> RetryAction {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     #[tokio::test]
     async fn retry_eventually_succeeds() {

@@ -1,13 +1,16 @@
-
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::storage::entity::{Direction, EntityRecord, TraverseNode};
-pub use crate::storage::relation::RelationRecord;
+pub use crate::storage::{
+    entity::{Direction, EntityRecord, TraverseNode},
+    relation::RelationRecord,
+};
 
 pub mod extractor;
+
+use extractor::{EntityCandidate, EntityExtractor, Extraction, NoopExtractor, RelationCandidate};
 
 use crate::{
     error::{NovaError, NovaResult},
@@ -17,11 +20,9 @@ use crate::{
         relation::{InsertRelationInput, RelationRepository, SqliteRelationRepository},
     },
 };
-use extractor::{EntityCandidate, EntityExtractor, Extraction, NoopExtractor, RelationCandidate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphExtractOpts {
-
     pub enabled: bool,
 
     pub upsert_entities: bool,
@@ -33,13 +34,17 @@ pub struct GraphExtractOpts {
 
 impl Default for GraphExtractOpts {
     fn default() -> Self {
-        Self { enabled: false, upsert_entities: true, create_relations: true, min_confidence: 0.0 }
+        Self {
+            enabled: false,
+            upsert_entities: true,
+            create_relations: true,
+            min_confidence: 0.0,
+        }
     }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LinkResult {
-
     pub entities: Vec<(EntityCandidate, Uuid)>,
 
     pub entities_upserted: usize,
@@ -51,7 +56,6 @@ pub struct LinkResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeEntitiesInput {
-
     pub keep_uuid: Uuid,
 
     pub discard_uuids: Vec<Uuid>,
@@ -59,7 +63,6 @@ pub struct MergeEntitiesInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeEntitiesOutput {
-
     pub kept_uuid: Uuid,
 
     pub merged: Vec<Uuid>,
@@ -69,7 +72,6 @@ pub struct MergeEntitiesOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraverseOpts {
-
     pub max_depth: u8,
 
     pub max_nodes: usize,
@@ -81,13 +83,17 @@ pub struct TraverseOpts {
 
 impl Default for TraverseOpts {
     fn default() -> Self {
-        Self { max_depth: 2, max_nodes: 200, predicate_whitelist: Vec::new(), min_confidence: 0.0 }
+        Self {
+            max_depth: 2,
+            max_nodes: 200,
+            predicate_whitelist: Vec::new(),
+            min_confidence: 0.0,
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct GraphService {
-
     pub database: Database,
 
     pub extractor: Arc<dyn EntityExtractor>,
@@ -104,7 +110,6 @@ impl std::fmt::Debug for GraphService {
 }
 
 impl GraphService {
-
     pub fn with_parts(database: Database, extractor: Arc<dyn EntityExtractor>) -> Self {
         Self {
             database,
@@ -170,7 +175,6 @@ impl GraphService {
         start: Uuid,
         opts: TraverseOpts,
     ) -> NovaResult<Vec<TraverseNode>> {
-
         let _start_ent = self.entity_repo.get_by_uuid(&self.database, start).await?;
         let nodes = self
             .relation_repo
@@ -196,19 +200,18 @@ impl GraphService {
         self.entity_repo.list(&self.database, name_prefix, entity_type, limit, 0).await
     }
 
-    pub async fn merge_entities(&self, input: MergeEntitiesInput) -> NovaResult<MergeEntitiesOutput> {
+    pub async fn merge_entities(
+        &self,
+        input: MergeEntitiesInput,
+    ) -> NovaResult<MergeEntitiesOutput> {
         let keep = input.keep_uuid;
         let discards = input.discard_uuids;
 
         if discards.is_empty() || discards.len() > 50 {
-            return Err(NovaError::validation(
-                "discard_uuids must contain between 1 and 50 UUIDs",
-            ));
+            return Err(NovaError::validation("discard_uuids must contain between 1 and 50 UUIDs"));
         }
         if discards.contains(&keep) {
-            return Err(NovaError::validation(
-                "keep_uuid must not be in discard_uuids",
-            ));
+            return Err(NovaError::validation("keep_uuid must not be in discard_uuids"));
         }
 
         let _keep_entity = self.entity_repo.get_by_uuid(&self.database, keep).await?;
@@ -224,13 +227,12 @@ impl GraphService {
         for &d in &discards {
             let d_str = d.to_string();
 
-            let outgoing: Vec<(String, String)> = sqlx::query_as(
-                "SELECT uuid, target_uuid FROM relations WHERE source_uuid = ?1",
-            )
-            .bind(&d_str)
-            .fetch_all(pool)
-            .await
-            .map_err(NovaError::storage)?;
+            let outgoing: Vec<(String, String)> =
+                sqlx::query_as("SELECT uuid, target_uuid FROM relations WHERE source_uuid = ?1")
+                    .bind(&d_str)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(NovaError::storage)?;
 
             for (rel_uuid, tgt_str) in &outgoing {
                 let tgt = match Uuid::parse_str(tgt_str) {
@@ -254,13 +256,12 @@ impl GraphService {
                 }
             }
 
-            let incoming: Vec<(String, String)> = sqlx::query_as(
-                "SELECT uuid, source_uuid FROM relations WHERE target_uuid = ?1",
-            )
-            .bind(&d_str)
-            .fetch_all(pool)
-            .await
-            .map_err(NovaError::storage)?;
+            let incoming: Vec<(String, String)> =
+                sqlx::query_as("SELECT uuid, source_uuid FROM relations WHERE target_uuid = ?1")
+                    .bind(&d_str)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(NovaError::storage)?;
 
             for (rel_uuid, src_str) in &incoming {
                 let src = match Uuid::parse_str(src_str) {
@@ -396,10 +397,9 @@ fn dedupe_by_confidence(rels: &[RelationCandidate]) -> Vec<RelationCandidate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::graph::extractor::RegexWikiExtractor;
-    use crate::storage::Database;
+    use crate::{
+        Uuid, config::StorageConfig, graph::extractor::RegexWikiExtractor, storage::Database,
+    };
 
     async fn temp_svc() -> GraphService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-graph-{}", Uuid::new_v4()));
@@ -420,7 +420,10 @@ mod tests {
         let r = svc
             .extract_and_link(
                 "[[A]] and [[B]]",
-                &GraphExtractOpts { enabled: false, ..Default::default() },
+                &GraphExtractOpts {
+                    enabled: false,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -434,7 +437,10 @@ mod tests {
         let r = svc
             .extract_and_link(
                 "#todo [[Alice Smith]] had a meeting with [[Bob Jones]] at [[Acme Corp]].",
-                &GraphExtractOpts { enabled: true, ..Default::default() },
+                &GraphExtractOpts {
+                    enabled: true,
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -450,7 +456,12 @@ mod tests {
         let out = repo
             .upsert(
                 db,
-                UpsertEntityInput { name: n, r#type: t, description: None, metadata: None },
+                UpsertEntityInput {
+                    name: n,
+                    r#type: t,
+                    description: None,
+                    metadata: None,
+                },
             )
             .await
             .unwrap();
@@ -494,7 +505,14 @@ mod tests {
         insert_edge(&svc.database, &svc.relation_repo, c, d, "knows", 1.0).await;
 
         let nodes = svc
-            .traverse_graph(a, TraverseOpts { max_depth: 2, max_nodes: 50, ..Default::default() })
+            .traverse_graph(
+                a,
+                TraverseOpts {
+                    max_depth: 2,
+                    max_nodes: 50,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 

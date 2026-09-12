@@ -6,11 +6,7 @@ use uuid::Uuid;
 use super::MemoryService;
 use crate::{
     error::{NovaError, NovaResult},
-    storage::{
-        MemorySource,
-        memory::sha256_hex,
-        vector::VectorStore,
-    },
+    storage::{MemorySource, memory::sha256_hex, vector::VectorStore},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -67,13 +63,19 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
     for (i, item) in input.items.into_iter().enumerate() {
         let content = item.content.trim().to_string();
         if content.is_empty() {
-            errors.push(ImportError { index: i, message: "content must not be empty".into() });
+            errors.push(ImportError {
+                index: i,
+                message: "content must not be empty".into(),
+            });
             continue;
         }
 
         let importance = item.importance.unwrap_or(0.5);
         if !(0.0..=1.0).contains(&importance) || !importance.is_finite() {
-            errors.push(ImportError { index: i, message: format!("importance must be in [0.0, 1.0], got {importance}") });
+            errors.push(ImportError {
+                index: i,
+                message: format!("importance must be in [0.0, 1.0], got {importance}"),
+            });
             continue;
         }
 
@@ -83,9 +85,12 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
             "system" => MemorySource::System,
             "tool" => MemorySource::Tool,
             other => {
-                errors.push(ImportError { index: i, message: format!("unknown source: {other}") });
+                errors.push(ImportError {
+                    index: i,
+                    message: format!("unknown source: {other}"),
+                });
                 continue;
-            }
+            },
         };
 
         let metadata = item.metadata.unwrap_or(serde_json::json!({}));
@@ -96,7 +101,7 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         let content_hash = sha256_hex(&content);
 
         let existing: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND status != 'deleted'"
+            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND status != 'deleted'",
         )
         .bind(&content_hash)
         .fetch_optional(&svc.database.pool)
@@ -109,14 +114,13 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         }
 
         if let Some(u) = provided_uuid {
-            let uuid_exists: bool = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM memory_items WHERE uuid = ?1"
-            )
-            .bind(u.to_string())
-            .fetch_one(&svc.database.pool)
-            .await
-            .map_err(NovaError::storage)?
-            > 0;
+            let uuid_exists: bool =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM memory_items WHERE uuid = ?1")
+                    .bind(u.to_string())
+                    .fetch_one(&svc.database.pool)
+                    .await
+                    .map_err(NovaError::storage)?
+                    > 0;
 
             if uuid_exists {
                 duplicates += 1;
@@ -129,7 +133,9 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         let expires_ts = expires_at.map(|t| t.timestamp());
 
         let result = sqlx::query(
-            "INSERT INTO memory_items (uuid, content, content_hash, metadata_json, source, importance, access_count, last_accessed, created_at, expires_at, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            "INSERT INTO memory_items (uuid, content, content_hash, metadata_json, source, \
+             importance, access_count, last_accessed, created_at, expires_at, status) VALUES (?1, \
+             ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(insert_uuid.to_string())
         .bind(&content)
@@ -148,39 +154,57 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         match result {
             Ok(_) => {
                 if !tags.is_empty() {
-                    let _ = crate::storage::memory::attach_tags(&svc.database.pool, insert_uuid, &tags).await;
+                    let _ =
+                        crate::storage::memory::attach_tags(&svc.database.pool, insert_uuid, &tags)
+                            .await;
                 }
                 if input.embed {
                     let meta = svc.embedding.meta();
                     match svc.embedding.embed_one(&content).await {
                         Ok(vec) => {
                             if vec.len() == meta.dims {
-                                let _ = svc.vector_store.insert_vector(insert_uuid, &meta.provider, &meta.model, &vec).await;
+                                let _ = svc
+                                    .vector_store
+                                    .insert_vector(insert_uuid, &meta.provider, &meta.model, &vec)
+                                    .await;
                             }
-                        }
+                        },
                         Err(e) => {
-                            errors.push(ImportError { index: i, message: format!("embedding failed: {e}") });
-                        }
+                            errors.push(ImportError {
+                                index: i,
+                                message: format!("embedding failed: {e}"),
+                            });
+                        },
                     }
                 }
                 imported += 1;
-            }
+            },
             Err(e) => {
-                errors.push(ImportError { index: i, message: format!("insert failed: {e}") });
-            }
+                errors.push(ImportError {
+                    index: i,
+                    message: format!("insert failed: {e}"),
+                });
+            },
         }
     }
 
-    Ok(ImportOutput { received, imported, duplicates, errors })
+    Ok(ImportOutput {
+        received,
+        imported,
+        duplicates,
+        errors,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Uuid;
-    use crate::config::StorageConfig;
-    use crate::memory::ops_remember::{RememberInput, service_for_tests};
-    use crate::storage::Database;
+    use crate::{
+        Uuid,
+        config::StorageConfig,
+        memory::ops_remember::{RememberInput, service_for_tests},
+        storage::Database,
+    };
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-import-{}", Uuid::new_v4()));
@@ -213,7 +237,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let input = ImportInput { items, embed: false, on_conflict: ConflictStrategy::Skip };
+        let input = ImportInput {
+            items,
+            embed: false,
+            on_conflict: ConflictStrategy::Skip,
+        };
         let out = import_memories(&svc, input).await.unwrap();
         assert_eq!(out.received, 2);
         assert_eq!(out.imported, 2);
@@ -225,15 +253,17 @@ mod tests {
     async fn import_preserves_provided_uuid() {
         let svc = temp_svc().await;
         let custom_uuid = Uuid::new_v4();
-        let items = vec![
-            ImportItem {
-                content: "memory with custom uuid".into(),
-                uuid: Some(custom_uuid),
-                importance: Some(0.5),
-                ..Default::default()
-            },
-        ];
-        let input = ImportInput { items, embed: false, on_conflict: ConflictStrategy::Skip };
+        let items = vec![ImportItem {
+            content: "memory with custom uuid".into(),
+            uuid: Some(custom_uuid),
+            importance: Some(0.5),
+            ..Default::default()
+        }];
+        let input = ImportInput {
+            items,
+            embed: false,
+            on_conflict: ConflictStrategy::Skip,
+        };
         let out = import_memories(&svc, input).await.unwrap();
         assert_eq!(out.imported, 1);
 
@@ -244,16 +274,24 @@ mod tests {
     #[tokio::test]
     async fn import_skips_duplicate_content() {
         let svc = temp_svc().await;
-        svc.remember(RememberInput { content: "unique content", importance: 0.5, ..Default::default() }).await.unwrap();
+        svc.remember(RememberInput {
+            content: "unique content",
+            importance: 0.5,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
-        let items = vec![
-            ImportItem {
-                content: "unique content".into(),
-                importance: Some(0.5),
-                ..Default::default()
-            },
-        ];
-        let input = ImportInput { items, embed: false, on_conflict: ConflictStrategy::Skip };
+        let items = vec![ImportItem {
+            content: "unique content".into(),
+            importance: Some(0.5),
+            ..Default::default()
+        }];
+        let input = ImportInput {
+            items,
+            embed: false,
+            on_conflict: ConflictStrategy::Skip,
+        };
         let out = import_memories(&svc, input).await.unwrap();
         assert_eq!(out.imported, 0);
         assert_eq!(out.duplicates, 1);
@@ -262,17 +300,26 @@ mod tests {
     #[tokio::test]
     async fn import_skips_existing_uuid() {
         let svc = temp_svc().await;
-        let existing = svc.remember(RememberInput { content: "existing", importance: 0.5, ..Default::default() }).await.unwrap();
-
-        let items = vec![
-            ImportItem {
-                content: "different content but same uuid".into(),
-                uuid: Some(existing.uuid),
-                importance: Some(0.5),
+        let existing = svc
+            .remember(RememberInput {
+                content: "existing",
+                importance: 0.5,
                 ..Default::default()
-            },
-        ];
-        let input = ImportInput { items, embed: false, on_conflict: ConflictStrategy::Skip };
+            })
+            .await
+            .unwrap();
+
+        let items = vec![ImportItem {
+            content: "different content but same uuid".into(),
+            uuid: Some(existing.uuid),
+            importance: Some(0.5),
+            ..Default::default()
+        }];
+        let input = ImportInput {
+            items,
+            embed: false,
+            on_conflict: ConflictStrategy::Skip,
+        };
         let out = import_memories(&svc, input).await.unwrap();
         assert_eq!(out.imported, 0);
         assert_eq!(out.duplicates, 1);
@@ -303,7 +350,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let input = ImportInput { items, embed: false, on_conflict: ConflictStrategy::Skip };
+        let input = ImportInput {
+            items,
+            embed: false,
+            on_conflict: ConflictStrategy::Skip,
+        };
         let out = import_memories(&svc, input).await.unwrap();
         assert_eq!(out.received, 4);
         assert_eq!(out.imported, 2);
