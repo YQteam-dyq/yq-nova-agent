@@ -1,22 +1,44 @@
 # Contributing
 
-感谢你愿意为这个项目贡献力量。
+Thank you for taking the time to contribute to this project.
 
-## 提交 PR
+## Language Policy (Mandatory)
 
-欢迎直接向 main 分支提交 PR。仓库开启了分支保护（Ruleset）：普通分支的 PR 需要 CI 通过后才能合并；仓库管理员可以绕过保护直接推送。
+Everything added to this repository must be written in English. This is enforced by CI, it is not just a convention.
 
-## 开发流程
+### Rules
 
-- fork 或 clone 后先安装依赖，并跑通现有测试
-- 修改代码，并为改动补充或更新测试
-- 提交前运行 lint / typecheck / test（具体命令见 README 或 .github/workflows 下的 CI 配置）
-- 推送分支并创建 PR，PR 会自动触发 CI 与 Sourcery 机器人审查
+1. Pull request titles and descriptions must be written in English.
+2. Every added line of source code must be written in English. This includes code comments (line, block and doc comments), log messages, error messages and assertion messages.
+3. Commit messages and branch names must be written in English.
+4. Localized resources are exempt, because holding non-English text is their purpose. The exemption covers files under `i18n/`, `locale/`, `locales/`, `lang/` and `translations/`, and files with the extensions `.po`, `.pot`, `.ftl`, `.arb`, `.resx` and `.properties`.
 
-## 提交信息规范
+### Enforcement
 
-推荐使用 Conventional Commits 风格，例如 feat / fix / refactor / docs / chore / ci，便于自动生成变更记录。
+- The `English Only` workflow runs on every pull request and fails when it finds non-English characters in the pull request title, in the pull request description, or in any added line of the diff.
+- `English Only` is registered as a required status check, so a pull request cannot be merged until it passes.
+- Only added lines are inspected, so pre-existing text elsewhere in the repository never blocks a pull request.
 
-## 发布与维护
+### Escape hatch
 
-维护者合并 PR 使用 Squash 合并；合并后源分支会自动删除。版本发布按需打 tag。
+- If a change genuinely needs non-English text outside the allowed paths, add the `english-check-bypass` label to the pull request. The workflow then reports success instead of failing, so the exception stays visible in the pull request timeline.
+- Treat this as a last resort and explain in the pull request description why it is needed.
+
+## Opening a Pull Request
+
+Pull requests targeting the `main` branch are welcome. Branch protection is enabled on this repository: a pull request from a regular branch must pass CI before it can be merged, while repository administrators may bypass the protection and push directly.
+
+## Development Workflow
+
+- After forking or cloning, install the dependencies and make sure the existing tests pass.
+- Make your change and add or update tests for it.
+- Before committing, run lint / typecheck / test (see the README or the CI configuration under `.github/workflows` for the exact commands).
+- Push your branch and open a pull request. CI and the Sourcery review bot run automatically.
+
+## Commit Messages
+
+Conventional Commits are recommended, for example feat / fix / refactor / docs / chore / ci. This makes it easier to generate change logs automatically.
+
+## Release and Maintenance
+
+Maintainers merge pull requests with a squash merge, and the source branch is deleted automatically afterwards. Releases are tagged as needed.
