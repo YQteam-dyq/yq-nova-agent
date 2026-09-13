@@ -152,9 +152,16 @@ jobs:
               if existing is None:
                   gh(["api", "--method", "POST", target, "--input", payload])
                   print("Posted a new review comment.")
-              else:
-                  gh(["api", "--method", "PATCH", target + "/" + str(existing), "--input", payload])
+                  return
+              # "Update an issue comment" is PATCH repos/{owner}/{repo}/issues/comments/{comment_id}.
+              update = "repos/{0}/issues/comments/{1}".format(REPO, existing)
+              try:
+                  gh(["api", "--method", "PATCH", update, "--input", payload])
                   print("Updated the existing review comment.")
+              except RuntimeError as error:
+                  print("::warning::The review comment could not be updated ({0}), posting a new one instead.".format(error))
+                  gh(["api", "--method", "POST", target, "--input", payload])
+                  print("Posted a new review comment.")
 
 
           def submit_review(event, body):
