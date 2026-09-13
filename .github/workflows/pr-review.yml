@@ -44,8 +44,13 @@ permissions:
   pull-requests: write
 
 concurrency:
+  # One group per pull request, but never cancel a run that is already in progress.
+  # GitHub cancels an in-progress run as soon as another event on the same pull request
+  # arrives - for example the edited event that a review bot sends right after every push -
+  # which left the pushed commit with a cancelled PR Review check instead of a real review.
+  # Keeping cancel-in-progress disabled makes every push finish its review.
   group: pr-review-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   pr-review:
