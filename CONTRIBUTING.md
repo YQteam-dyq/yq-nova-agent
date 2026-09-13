@@ -43,7 +43,7 @@ The `PR Review` workflow reviews every pull request automatically, and it review
 - After forking or cloning, install the dependencies and make sure the existing tests pass.
 - Make your change and add or update tests for it.
 - Before committing, run lint / typecheck / test (see the README or the CI configuration under `.github/workflows` for the exact commands).
-- Push your branch and open a pull request. CI and the Sourcery review bot run automatically.
+- Push your branch and open a pull request. CI and the `PR Review` bot run automatically.
 
 ## Commit Messages
 
