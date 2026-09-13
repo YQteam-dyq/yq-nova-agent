@@ -28,6 +28,16 @@ Everything added to this repository must be written in English. This is enforced
 
 Pull requests targeting the `main` branch are welcome. Branch protection is enabled on this repository: a pull request from a regular branch must pass CI before it can be merged, while repository administrators may bypass the protection and push directly.
 
+## Pull Request Review Bot
+
+The `PR Review` workflow reviews every pull request automatically, and it reviews the pull request again every time new commits are pushed to the branch.
+
+- The review is posted as a single sticky comment that is updated in place, so the pull request timeline stays clean.
+- The bot checks the pull request title and description, the required description sections, the checklist items and the added lines of the diff.
+- When the review finds no problem, the bot approves the pull request with the `APPROVE` review state. This relies on the `Allow GitHub Actions to create and approve pull requests` repository setting, which is enabled on this repository.
+- When a later push stops passing the checks, the bot dismisses its earlier approval, so the pull request has to be reviewed again.
+- Add the `review-bypass` label to skip the review, and explain in the pull request description why the exception is needed.
+
 ## Development Workflow
 
 - After forking or cloning, install the dependencies and make sure the existing tests pass.
