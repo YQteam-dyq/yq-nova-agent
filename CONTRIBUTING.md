@@ -28,16 +28,28 @@ Everything added to this repository must be written in English. This is enforced
 
 Pull requests targeting the `main` branch are welcome. Branch protection is enabled on this repository: a pull request from a regular branch must pass CI before it can be merged, while repository administrators may bypass the protection and push directly.
 
+Write the description with `.github/PULL_REQUEST_TEMPLATE.md`: fill in the `## What changed` and `## How it was tested` sections and tick the checklist. The review bot reads those sections, so a description that keeps the template placeholders is not approved.
+
+## Pull Request Review Bot
+
+The `PR Review` workflow reviews every pull request automatically, and it reviews the pull request again every time new commits are pushed to the branch.
+
+- The review is posted as a single sticky comment that is updated in place, so the pull request timeline stays clean.
+- The bot checks the pull request title and description, the required description sections, the checklist items and the added lines of the diff.
+- When the review finds no problem, the bot approves the pull request with the `APPROVE` review state. This relies on the `Allow GitHub Actions to create and approve pull requests` repository setting, which is enabled on this repository.
+- When a later push stops passing the checks, the bot dismisses its earlier approval, so the pull request has to be reviewed again.
+- Add the `review-bypass` label to skip the review, and explain in the pull request description why the exception is needed.
+
 ## Development Workflow
 
 - After forking or cloning, install the dependencies and make sure the existing tests pass.
 - Make your change and add or update tests for it.
 - Before committing, run lint / typecheck / test (see the README or the CI configuration under `.github/workflows` for the exact commands).
-- Push your branch and open a pull request. CI and the Sourcery review bot run automatically.
+- Push your branch and open a pull request. CI and the `PR Review` bot run automatically.
 
 ## Commit Messages
 
-Conventional Commits are recommended, for example feat / fix / refactor / docs / chore / ci. This makes it easier to generate change logs automatically.
+Conventional Commits are required for every commit of a pull request, for example feat / fix / refactor / docs / chore / ci. The review bot reads every commit message and asks for a rewrite when one does not follow the convention or is not written in English, so a change of wording means a new commit rather than an edited history. This also makes it easier to generate change logs automatically.
 
 ## Release and Maintenance
 
