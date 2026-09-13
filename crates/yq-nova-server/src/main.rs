@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, process::ExitCode, sync::Arc, time::Duration};
+use std::{net::SocketAddr, process::ExitCode, time::Duration};
 
 use clap::{Args, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
 use tracing::{error, info, warn};
@@ -6,7 +6,7 @@ use yq_nova_core::{
     VERSION,
     config::Config,
     error::NovaResult,
-    graph::{GraphService, extractor::RegexWikiExtractor},
+    graph::{GraphService, extractor_from_config},
     logging,
     memory::{
         ForgetMode, MemoryService, SearchMode, ops_forget, ops_list, ops_recall, ops_remember,
@@ -603,7 +603,7 @@ async fn run() -> NovaResult<()> {
             }
 
             let memory = MemoryService::new(db.clone(), provider.clone());
-            let graph = GraphService::with_parts(db.clone(), Arc::new(RegexWikiExtractor::new()));
+            let graph = GraphService::with_parts(db.clone(), extractor_from_config(&cfg.graph)?);
 
             let cancel = background::new_cancel_token();
             let job_cancel = cancel.clone();
@@ -711,7 +711,7 @@ async fn open_core_services(
         );
     }
     let memory = MemoryService::new(db.clone(), provider.clone());
-    let graph = GraphService::with_parts(db.clone(), Arc::new(RegexWikiExtractor::new()));
+    let graph = GraphService::with_parts(db.clone(), extractor_from_config(&cfg.graph)?);
     Ok((db, memory, graph, provider_name))
 }
 
