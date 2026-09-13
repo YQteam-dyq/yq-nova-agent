@@ -28,6 +28,8 @@ Everything added to this repository must be written in English. This is enforced
 
 Pull requests targeting the `main` branch are welcome. Branch protection is enabled on this repository: a pull request from a regular branch must pass CI before it can be merged, while repository administrators may bypass the protection and push directly.
 
+Write the description with `.github/PULL_REQUEST_TEMPLATE.md`: fill in the `## What changed` and `## How it was tested` sections and tick the checklist. The review bot reads those sections, so a description that keeps the template placeholders is not approved.
+
 ## Pull Request Review Bot
 
 The `PR Review` workflow reviews every pull request automatically, and it reviews the pull request again every time new commits are pushed to the branch.
@@ -47,7 +49,7 @@ The `PR Review` workflow reviews every pull request automatically, and it review
 
 ## Commit Messages
 
-Conventional Commits are recommended, for example feat / fix / refactor / docs / chore / ci. This makes it easier to generate change logs automatically.
+Conventional Commits are required for every commit of a pull request, for example feat / fix / refactor / docs / chore / ci. The review bot reads every commit message and asks for a rewrite when one does not follow the convention or is not written in English, so a change of wording means a new commit rather than an edited history. This also makes it easier to generate change logs automatically.
 
 ## Release and Maintenance
 
