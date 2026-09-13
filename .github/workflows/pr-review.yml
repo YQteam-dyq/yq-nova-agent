@@ -1,0 +1,334 @@
+name: PR Review
+
+# Review bot for pull requests.
+#
+# The bot reviews a pull request when it is opened and again every time new
+# commits are pushed to it, so an update is reviewed exactly like the original
+# submission. The review comment is updated in place instead of being posted
+# again, and the bot approves the pull request when it finds no problem.
+#
+# What the bot checks
+#   1. The description follows .github/PULL_REQUEST_TEMPLATE.md: the required
+#      sections are filled in and the checklist is ticked.
+#   2. Every commit message follows Conventional Commits and is written in
+#      English.
+#   3. The added lines contain no debug leftovers, no merge conflict markers and
+#      no hardcoded secrets.
+#   4. The diff size stays reviewable, and files that need extra care are
+#      called out.
+#
+# What the bot posts
+#   - One sticky comment per pull request, identified by an HTML marker and
+#     rewritten on every run so it never goes stale.
+#   - An approving review when no problem is found. An earlier approval is
+#     withdrawn when a later update breaks the rules.
+#
+# Escape hatch: add the label "review-bypass" to skip the blocking checks when a
+# rule has to be broken on purpose.
+#
+# Repository requirement: Settings > Actions > General > Workflow permissions
+# must allow "Read and write permissions" and "Allow GitHub Actions to create
+# and approve pull requests", otherwise the review cannot be submitted. Pull
+# requests opened from a fork are skipped, because their token is read only.
+#
+# The job name "PR Review" is used as the required status check name.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-review:
+    name: PR Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Review pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          MARKER = "<!-- pr-review-bot -->"
+          REPO = os.environ["REPO"]
+          NUMBER = os.environ["PR_NUMBER"]
+          IS_DRAFT = (os.environ.get("PR_IS_DRAFT") or "").strip() == "true"
+          IS_FORK = (os.environ.get("PR_IS_FORK") or "").strip() == "true"
+          BYPASS_LABEL = "review-bypass"
+
+          CONVENTIONAL = re.compile(r"^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+")
+          NON_ENGLISH = re.compile("[\u2e80-\u2eff\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]")
+          CONFLICT = re.compile(r"^\s*(<{7,}|>{7,}|={7,}|\|{7,})")
+          DEBUG = re.compile(r"console\.(log|debug)\(|\bdebugger\b|\bdbg!\(|\bvar_dump\(|\bprint_r\(|\berror_log\(|\bdd\(")
+          TODO_MARK = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
+          SECRETS = (
+              ("AWS access key id", re.compile(r"AKIA[0-9A-Z]{16}")),
+              ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+              ("GitHub token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
+              ("Slack token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+          )
+          ASSIGNED_CREDENTIAL = re.compile(r"(?i)\b(api[_-]?key|apikey|secret|token|password|passwd)\b\s*[:=]\s*[\"'][^\"'\s]{10,}[\"']")
+          PLACEHOLDER = re.compile(r"(?i)(your[_-]|example|sample|placeholder|change[_-]?me|dummy|redacted|xxxx|\*\*\*|\$\{|%s|%v|process\.env|os\.environ|getenv|import\.meta\.env)")
+          DOC_SUFFIXES = (".md", ".mdx", ".rst", ".txt", ".adoc")
+          REQUIRED_SECTIONS = ("## What changed", "## How it was tested")
+          SENSITIVE_PATHS = (
+              ".github/workflows/",
+              ".github/CODEOWNERS",
+              "SECURITY.md",
+              ".htaccess",
+              "Dockerfile",
+              "docker-compose.yml",
+              "phpunit.xml",
+          )
+          IGNORED_PATHS = (
+              "package-lock.json",
+              "composer.lock",
+              "cargo.lock",
+              "yarn.lock",
+              "pnpm-lock.yaml",
+              ".min.js",
+              ".min.css",
+              "/dist/",
+              "/vendor/",
+              "/node_modules/",
+              ".snap",
+          )
+          MAX_ITEMS = 25
+
+
+          def gh(args, stdin_text=None):
+              result = subprocess.run(["gh"] + args, input=stdin_text, capture_output=True, text=True)
+              if result.returncode != 0:
+                  raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+              return result.stdout
+
+
+          def gh_items(path):
+              output = gh(["api", path, "--paginate", "--jq", ".[]"])
+              return [json.loads(line) for line in output.splitlines() if line.strip()]
+
+
+          def is_ignored(path):
+              lowered = "/" + path.lower().lstrip("/")
+              return any(token in lowered for token in IGNORED_PATHS)
+
+
+          def write_payload(data):
+              handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+              with handle:
+                  handle.write(json.dumps(data))
+              return handle.name
+
+
+          def post_comment(body):
+              comments = gh_items("repos/{0}/issues/{1}/comments?per_page=100".format(REPO, NUMBER))
+              existing = None
+              for comment in comments:
+                  if MARKER in (comment.get("body") or ""):
+                      existing = comment.get("id")
+              payload = write_payload({"body": body})
+              target = "repos/{0}/issues/{1}/comments".format(REPO, NUMBER)
+              if existing is None:
+                  gh(["api", "--method", "POST", target, "--input", payload])
+                  print("Posted a new review comment.")
+              else:
+                  gh(["api", "--method", "PATCH", target + "/" + str(existing), "--input", payload])
+                  print("Updated the existing review comment.")
+
+
+          def submit_review(event, body):
+              if IS_DRAFT:
+                  print("The pull request is a draft, the review is not submitted yet.")
+                  return
+              payload = write_payload({"body": body, "event": event})
+              gh(["api", "--method", "POST", "repos/{0}/pulls/{1}/reviews".format(REPO, NUMBER), "--input", payload])
+              print("Submitted a review with event {0}.".format(event))
+
+
+          def dismiss_earlier_approval(reason):
+              reviews = gh_items("repos/{0}/pulls/{1}/reviews?per_page=100".format(REPO, NUMBER))
+              for review in reviews:
+                  login = (review.get("user") or {}).get("login") or ""
+                  if review.get("state") != "APPROVED" or not login.endswith("[bot]"):
+                      continue
+                  payload = write_payload({"message": reason, "event": "DISMISS"})
+                  gh(["api", "--method", "PUT", "repos/{0}/pulls/{1}/reviews/{2}/dismissals".format(REPO, NUMBER, review.get("id")), "--input", payload])
+                  print("Withdrawn the earlier approval from {0}.".format(login))
+
+
+          if IS_FORK:
+              print("::warning::This pull request comes from a fork, the token is read only, so no review is posted.")
+              sys.exit(0)
+
+          pull = json.loads(gh(["pr", "view", NUMBER, "--repo", REPO, "--json", "title,body,isDraft,url,additions,deletions,changedFiles,labels,headRefOid"]))
+          labels = [(item.get("name") or "") for item in (pull.get("labels") or [])]
+          bypassed = BYPASS_LABEL in labels
+          problems = []
+          notes = []
+
+          # 1. The description follows the pull request template.
+          body = pull.get("body") or ""
+          for section in REQUIRED_SECTIONS:
+              if section not in body:
+                  problems.append("The description is missing the `{0}` section from the pull request template.".format(section))
+                  continue
+              remainder = body.split(section, 1)[1].split("\n## ", 1)[0]
+              remainder = re.sub(r"<!--.*?-->", "", remainder, flags=re.S).strip()
+              if len(remainder) < 12:
+                  problems.append("The `{0}` section is still empty.".format(section))
+
+          unticked = len(re.findall(r"^\s*-\s*\[ \]", body, re.M))
+          ticked = len(re.findall(r"^\s*-\s*\[[xX]\]", body, re.M))
+          if unticked:
+              problems.append("The checklist still has {0} unchecked item(s). Tick them once they are true, or explain why they do not apply.".format(unticked))
+          if ticked == 0:
+              notes.append("No checklist item is ticked, the template checklist may have been removed.")
+
+          # 2. Every commit message follows Conventional Commits and is English.
+          commits = gh_items("repos/{0}/pulls/{1}/commits?per_page=100".format(REPO, NUMBER))
+          for commit in commits:
+              sha = (commit.get("sha") or "")[:7]
+              message = ((commit.get("commit") or {}).get("message") or "").strip()
+              subject = message.splitlines()[0].strip() if message else ""
+              print("Reviewed commit {0}: {1}".format(sha, subject))
+              if not subject:
+                  problems.append("Commit `{0}` has an empty message.".format(sha))
+                  continue
+              if subject.startswith("Merge ") or subject.startswith("Revert "):
+                  continue
+              if not CONVENTIONAL.match(subject):
+                  problems.append("Commit `{0}` does not follow Conventional Commits: `{1}`.".format(sha, subject))
+              if NON_ENGLISH.search(message):
+                  problems.append("Commit `{0}` contains non-English characters in its message.".format(sha))
+
+          # 3. The added lines are clean.
+          diff = gh(["pr", "diff", NUMBER, "--repo", REPO])
+          current_file = ""
+          added = []
+          for line in diff.splitlines():
+              if line.startswith("+++ "):
+                  current_file = line[6:] if line.startswith("+++ b/") else line[4:]
+                  continue
+              if line.startswith("+") and not line.startswith("+++"):
+                  added.append((current_file, line[1:]))
+
+          if not added:
+              notes.append("The diff contains no added line.")
+
+          conflicts = []
+          debugs = []
+          todos = []
+          secrets = []
+          for path, text in added:
+              if is_ignored(path):
+                  continue
+              stripped = text.strip()
+              if CONFLICT.match(text):
+                  conflicts.append("`{0}`: `{1}`".format(path, stripped[:60]))
+              if DEBUG.search(text):
+                  debugs.append("`{0}`: `{1}`".format(path, stripped[:100]))
+              if TODO_MARK.search(text):
+                  todos.append("`{0}`: `{1}`".format(path, stripped[:100]))
+              for label, pattern in SECRETS:
+                  if pattern.search(text):
+                      secrets.append("`{0}`: possible {1} in `{2}`".format(path, label, stripped[:80]))
+                      break
+              else:
+                  if ASSIGNED_CREDENTIAL.search(text) and not PLACEHOLDER.search(text) and not path.lower().endswith(DOC_SUFFIXES):
+                      secrets.append("`{0}`: possible assigned credential in `{1}`".format(path, stripped[:80]))
+
+          if conflicts:
+              problems.append("Merge conflict markers found in the diff ({0} line(s)).".format(len(conflicts)))
+              notes.extend(conflicts[:MAX_ITEMS])
+          if secrets:
+              problems.append("Possible hardcoded secret found ({0} line(s)).".format(len(secrets)))
+              notes.extend(secrets[:MAX_ITEMS])
+          if debugs:
+              problems.append("Debug leftovers found ({0} line(s)).".format(len(debugs)))
+              notes.extend(debugs[:MAX_ITEMS])
+          if todos:
+              notes.append("Unresolved markers found ({0} line(s)).".format(len(todos)))
+              notes.extend(todos[:MAX_ITEMS])
+
+          # 4. The diff stays reviewable.
+          total = (pull.get("additions") or 0) + (pull.get("deletions") or 0)
+          if total > 1500:
+              notes.append("The diff is large ({0} additions and {1} deletions across {2} file(s)), consider splitting it.".format(pull.get("additions"), pull.get("deletions"), pull.get("changedFiles")))
+
+          for item in gh_items("repos/{0}/pulls/{1}/files?per_page=100".format(REPO, NUMBER)):
+              name = item.get("filename") or ""
+              if any(name == sensitive or name.startswith(sensitive) for sensitive in SENSITIVE_PATHS):
+                  notes.append("`{0}` is a file that needs extra care, please double check it.".format(name))
+              if item.get("status") == "added" and (item.get("additions") or 0) > 600:
+                  notes.append("`{0}` adds {1} lines at once.".format(name, item.get("additions")))
+
+          # 5. Report and approve.
+          head_sha = (pull.get("headRefOid") or "")[:7]
+          lines = [MARKER, "## Review bot", "", "Reviewed commit `{0}` of this pull request.".format(head_sha), ""]
+          if bypassed:
+              lines.append("**Result: blocking checks are bypassed** through the `{0}` label.".format(BYPASS_LABEL))
+          elif problems:
+              lines.append("**Result: changes needed** before this pull request can be approved.")
+          elif IS_DRAFT:
+              lines.append("**Result: no problem found.** The pull request is still a draft, so the approval is sent once it is marked ready for review.")
+          else:
+              lines.append("**Result: approved.** No problem found in this update.")
+          lines.append("")
+          if problems:
+              lines.append("### Problems")
+              lines.append("")
+              for item in problems[:MAX_ITEMS]:
+                  lines.append("- " + item)
+              if len(problems) > MAX_ITEMS:
+                  lines.append("- and {0} more problem(s).".format(len(problems) - MAX_ITEMS))
+              lines.append("")
+          if notes:
+              lines.append("### Notes")
+              lines.append("")
+              for item in notes[:80]:
+                  lines.append("- " + item)
+              lines.append("")
+          lines.append("---")
+          lines.append("")
+          lines.append("The bot runs again on every update, so pushing a fix triggers a fresh review. Add the `{0}` label to skip the blocking checks.".format(BYPASS_LABEL))
+          comment = "\n".join(lines)
+
+          for item in problems:
+              print("::warning::" + item)
+          for item in notes:
+              print("::notice::" + item)
+
+          post_comment(comment)
+          blocking = [] if bypassed else problems
+          if blocking:
+              dismiss_earlier_approval("A later update of this pull request no longer passes the review checks.")
+              print("::error::The review found {0} problem(s), the pull request is not approved.".format(len(blocking)))
+              sys.exit(1)
+
+          submit_review("APPROVE", "The review bot found no problem in commit `{0}`.".format(head_sha))
+          PY
+
+      - name: Register the check on manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "The PR Review bot is registered for this repository."
