@@ -104,8 +104,9 @@ pub fn extractive(texts: &[&str], max_chars: usize) -> String {
     let mut out = String::new();
     let limit = max_chars.max(1);
     for (_, _, sentence) in candidates {
-        let delta = if out.is_empty() { sentence.len() } else { sentence.len() + 1 };
-        if out.len() + delta > limit && !out.is_empty() {
+        let sentence_chars = sentence.chars().count();
+        let delta = if out.is_empty() { sentence_chars } else { sentence_chars + 1 };
+        if out.chars().count() + delta > limit && !out.is_empty() {
             continue;
         }
         if !out.is_empty() {
@@ -121,6 +122,9 @@ pub async fn summarize_group(
     member_uuids: &[Uuid],
     opts: &SummaryOptions,
 ) -> NovaResult<SummaryEntry> {
+    if !opts.enabled {
+        return Err(crate::error::NovaError::validation("summary: feature disabled"));
+    }
     let members = member_uuids.to_vec();
     let mut records = Vec::with_capacity(members.len());
     for uuid in &members {

@@ -100,10 +100,9 @@ async fn count_references(svc: &MemoryService, uuid: Uuid) -> NovaResult<usize> 
 }
 
 async fn record_log(svc: &MemoryService, uuid: Uuid, importance: f32) -> NovaResult<()> {
-    let now = Utc::now().timestamp();
+    let now = Utc::now().timestamp_millis();
     sqlx::query(
-        "INSERT OR REPLACE INTO importance_log (memory_uuid, importance, recorded_at) VALUES (?1, \
-         ?2, ?3)",
+        "INSERT INTO importance_log (memory_uuid, importance, recorded_at) VALUES (?1, ?2, ?3)",
     )
     .bind(uuid.to_string())
     .bind(importance as f64)

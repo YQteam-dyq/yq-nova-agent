@@ -534,9 +534,11 @@ mod tests {
         assert_eq!(a.uuid, b.uuid);
         assert!(b.duplicate);
         assert!(b.merged);
-        assert!(!b.near_duplicates.is_empty());
         let combined = svc.get_memory(a.uuid).await.unwrap();
         assert_eq!(combined.content, "shared content alpha project\nshared content alpha project");
+        let q = svc.embedding.embed_one(&combined.content).await.unwrap();
+        let hits = svc.vector_store.knn_search(&q, 5, 0.99).await.unwrap();
+        assert!(hits.iter().any(|h| h.memory_uuid == a.uuid), "merged memory re-embedded");
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::super::MemoryService;
 use crate::{
-    error::NovaResult,
+    error::{ErrorCode, NovaResult},
     storage::{
         MemoryStatus,
         memory::{MemoryRepository, sha256_hex},
@@ -68,7 +68,8 @@ pub async fn detect(
     for hit in hits {
         let record = match svc.memory_repo.get_by_uuid(&svc.database, hit.memory_uuid).await {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) if e.code() == ErrorCode::NotFound => continue,
+            Err(e) => return Err(e),
         };
         if record.status != MemoryStatus::Active {
             continue;
@@ -126,5 +127,16 @@ async fn merge_into(svc: &MemoryService, existing_uuid: Uuid, content: &str) -> 
     };
     let hash = sha256_hex(&combined);
     svc.memory_repo.update_content(&svc.database, existing_uuid, &combined, &hash).await?;
+    let meta = svc.embedding.meta();
+    let vec = svc.embedding.embed_one(&combined).await?;
+    if vec.len() != meta.dims {
+        return Err(crate::error::NovaError::embedding_msg(format!(
+            "embed_one returned dims={} expected dims={} for provider {}",
+            vec.len(),
+            meta.dims,
+            meta.provider
+        )));
+    }
+    svc.vector_store.insert_vector(existing_uuid, &meta.provider, &meta.model, &vec).await?;
     Ok(())
 }

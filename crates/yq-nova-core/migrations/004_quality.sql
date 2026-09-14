@@ -6,7 +6,9 @@ CREATE TABLE IF NOT EXISTS memory_links (
     metadata_json       TEXT    NOT NULL DEFAULT '{}',
     created_at          INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL,
-    PRIMARY KEY (source_memory_uuid, target_memory_uuid, kind)
+    PRIMARY KEY (source_memory_uuid, target_memory_uuid, kind),
+    FOREIGN KEY (source_memory_uuid) REFERENCES memory_items(uuid) ON DELETE CASCADE,
+    FOREIGN KEY (target_memory_uuid) REFERENCES memory_items(uuid) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_memory_uuid);
