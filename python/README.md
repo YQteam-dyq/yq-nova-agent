@@ -58,6 +58,17 @@ client.delete_memory(uuid)
 # Upsert an entity
 client.upsert_entity("Alice", entity_type="person", description="Rust engineer")
 
+# List entities with optional filters
+entities = client.list_entities(entity_type="person", limit=50)
+
+# Upsert a relation between two entities
+client.upsert_relation(
+    alice_uuid, bob_uuid, "reports_to", confidence=0.9, memory_uuid=memory_uuid
+)
+
+# List relations with optional source/target/predicate filters
+relations = client.list_relations(source=alice_uuid, limit=50)
+
 # BFS-traverse the graph from an entity uuid
 client.traverse("<entity-uuid>", max_depth=2)
 
@@ -67,6 +78,14 @@ client.extract_and_link(
     opts={"enabled": True, "upsert_entities": True, "create_relations": False},
 )
 ```
+
+The client covers every v1 endpoint: `health`, `stats`, `remember`,
+`remember_batch`, `recall`, `list_memories`, `forget`, `get_memory`,
+`update_memory`, `delete_memory`, `export_memories`, `import_memories`,
+`merge_memories`, `list_tags`, `rename_tag`, `delete_tag`, `upsert_entity`,
+`list_entities`, `merge_entities`, `upsert_relation`, `list_relations`,
+`traverse` and `extract_and_link`. A runnable walkthrough of all of them is in
+[`examples/full_api_demo.py`](examples/full_api_demo.py).
 
 ## Errors
 

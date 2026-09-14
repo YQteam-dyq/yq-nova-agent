@@ -44,6 +44,10 @@ build/
 .virtualenvs/
 .venv/
 
+# JS/TS SDK (if built)
+**/node_modules/
+**/tsconfig.*.tsbuildinfo
+
 # Trae IDE / spec staging
 .trae/
 

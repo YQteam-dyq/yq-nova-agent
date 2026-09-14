@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llama-index-yq-nova"
+version = "0.3.0"
+description = "LlamaIndex memory store and tools for the yq-nova agent memory service"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "BSL-1.0"
+keywords = ["llamaindex", "memory", "agent", "ai", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Other/Proprietary License",
+]
+dependencies = [
+    "llama-index-core>=0.10",
+    "yq-nova>=0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/YQteam-dyq/yq-nova-agent"
+
+[tool.setuptools.packages.find]
+include = ["llama_index_yq_nova*"]

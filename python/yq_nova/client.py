@@ -350,6 +350,73 @@ class Client:
         }
         return self._request("POST", "/v1/graph/entities", body)
 
+    def list_entities(
+        self,
+        name_prefix: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+
+        if limit < 1:
+            raise ValueError("list_entities: limit must be >= 1")
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if name_prefix is not None:
+            params["name_prefix"] = name_prefix
+        if entity_type is not None:
+            params["entity_type"] = entity_type
+        return self._request("GET", "/v1/graph/entities", params=params)
+
+    def upsert_relation(
+        self,
+        source_uuid: str,
+        target_uuid: str,
+        predicate: str,
+        confidence: float = 1.0,
+        metadata: Optional[Dict[str, Any]] = None,
+        idempotent: bool = True,
+        memory_uuid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+
+        if not source_uuid or not source_uuid.strip():
+            raise ValueError("upsert_relation: source_uuid must be non-empty")
+        if not target_uuid or not target_uuid.strip():
+            raise ValueError("upsert_relation: target_uuid must be non-empty")
+        if not predicate or not predicate.strip():
+            raise ValueError("upsert_relation: predicate must be non-empty")
+        body: Dict[str, Any] = {
+            "source_uuid": source_uuid,
+            "target_uuid": target_uuid,
+            "predicate": predicate,
+            "confidence": confidence,
+            "idempotent": idempotent,
+        }
+        if metadata is not None:
+            body["metadata"] = metadata
+        if memory_uuid is not None:
+            body["memory_uuid"] = memory_uuid
+        return self._request("POST", "/v1/graph/relations", body)
+
+    def list_relations(
+        self,
+        source: Optional[str] = None,
+        target: Optional[str] = None,
+        predicate: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+
+        if limit < 1:
+            raise ValueError("list_relations: limit must be >= 1")
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if source is not None:
+            params["source"] = source
+        if target is not None:
+            params["target"] = target
+        if predicate is not None:
+            params["predicate"] = predicate
+        return self._request("GET", "/v1/graph/relations", params=params)
+
     def traverse(
         self,
         start: str,
