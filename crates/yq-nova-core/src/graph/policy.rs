@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::extractor::{EntityExtractor, Extraction};
@@ -88,6 +89,7 @@ impl ExtractionPolicy {
 pub struct FilteringExtractor {
     inner: std::sync::Arc<dyn EntityExtractor>,
     policy: ExtractionPolicy,
+    last_extracted_at: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Debug for FilteringExtractor {
@@ -101,7 +103,13 @@ impl FilteringExtractor {
         Self {
             inner,
             policy,
+            last_extracted_at: None,
         }
+    }
+
+    pub fn with_last_extracted_at(mut self, last_extracted_at: Option<DateTime<Utc>>) -> Self {
+        self.last_extracted_at = last_extracted_at;
+        self
     }
 
     pub fn policy(&self) -> &ExtractionPolicy {
@@ -112,6 +120,9 @@ impl FilteringExtractor {
 #[async_trait]
 impl EntityExtractor for FilteringExtractor {
     async fn extract(&self, text: &str) -> NovaResult<Extraction> {
+        if !self.policy.frequency.should_extract(self.last_extracted_at) {
+            return Ok(Extraction::default());
+        }
         let extraction = self.inner.extract(text).await?;
         Ok(self.policy.apply(extraction))
     }

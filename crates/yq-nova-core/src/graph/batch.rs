@@ -16,6 +16,8 @@ use crate::{
 };
 
 const PAGE_SIZE: usize = 500;
+const MAX_ERROR_LOGS: usize = 20;
+const DEFAULT_MAX_RETAINED: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -50,6 +52,7 @@ pub struct BatchExtractSummary {
     pub entities_upserted: u64,
     pub relations_created: u64,
     pub errors: u64,
+    pub recent_errors: Vec<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub duration_ms: u64,
@@ -122,8 +125,16 @@ pub async fn run_batch_extract(
                     summary.entities_upserted += result.entities_upserted as u64;
                     summary.relations_created += result.relations_created as u64;
                 },
-                Err(_) => {
+                Err(error) => {
                     summary.errors += 1;
+                    if summary.recent_errors.len() < MAX_ERROR_LOGS {
+                        let mut detail = error.to_string();
+                        if detail.len() > 300 {
+                            detail.truncate(300);
+                            detail.push_str("...");
+                        }
+                        summary.recent_errors.push(detail);
+                    }
                 },
             }
         }
@@ -146,6 +157,7 @@ enum BatchJobMessage {
 pub struct BatchExtractQueue {
     tx: mpsc::Sender<BatchJobMessage>,
     registry: Arc<Mutex<Vec<(Uuid, BatchJobState)>>>,
+    max_retained: usize,
     worker: Arc<tokio::task::JoinHandle<()>>,
 }
 
@@ -157,13 +169,23 @@ impl std::fmt::Debug for BatchExtractQueue {
 
 impl BatchExtractQueue {
     pub fn spawn(db: Database, extractor: Arc<dyn EntityExtractor>, capacity: usize) -> Self {
+        Self::spawn_with_retention(db, extractor, capacity, DEFAULT_MAX_RETAINED)
+    }
+
+    pub fn spawn_with_retention(
+        db: Database,
+        extractor: Arc<dyn EntityExtractor>,
+        capacity: usize,
+        max_retained: usize,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(capacity.max(1));
         let registry = Arc::new(Mutex::new(Vec::new()));
         let worker_registry = registry.clone();
-        let worker = tokio::spawn(worker_loop(rx, db, extractor, worker_registry));
+        let worker = tokio::spawn(worker_loop(rx, db, extractor, worker_registry, max_retained));
         Self {
             tx,
             registry,
+            max_retained,
             worker: Arc::new(worker),
         }
     }
@@ -176,6 +198,7 @@ impl BatchExtractQueue {
                 .registry
                 .lock()
                 .map_err(|_| NovaError::internal("batch queue registry poisoned"))?;
+            prune_registry(&mut guard, self.max_retained);
             guard.push((
                 id,
                 BatchJobState::Queued {
@@ -232,6 +255,7 @@ async fn worker_loop(
     db: Database,
     extractor: Arc<dyn EntityExtractor>,
     registry: Arc<Mutex<Vec<(Uuid, BatchJobState)>>>,
+    max_retained: usize,
 ) {
     while let Some(message) = rx.recv().await {
         match message {
@@ -254,6 +278,7 @@ async fn worker_loop(
                                     summary,
                                 };
                             }
+                            prune_registry(&mut guard, max_retained);
                         }
                     },
                     Err(error) => {
@@ -266,10 +291,27 @@ async fn worker_loop(
                                     failed_at: Utc::now(),
                                 };
                             }
+                            prune_registry(&mut guard, max_retained);
                         }
                     },
                 }
             },
+        }
+    }
+}
+
+fn prune_registry(entries: &mut Vec<(Uuid, BatchJobState)>, max_retained: usize) {
+    if max_retained == 0 || entries.len() <= max_retained {
+        return;
+    }
+    let mut overflow = entries.len() - max_retained;
+    let mut i = 0;
+    while i < entries.len() && overflow > 0 {
+        if matches!(entries[i].1, BatchJobState::Done { .. } | BatchJobState::Failed { .. }) {
+            entries.remove(i);
+            overflow -= 1;
+        } else {
+            i += 1;
         }
     }
 }

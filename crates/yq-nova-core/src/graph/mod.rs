@@ -173,7 +173,7 @@ impl GraphService {
         if !opts.enabled || text.trim().is_empty() {
             return Ok(LinkResult::default());
         }
-        let extraction: Extraction = self.extractor.extract(text).await.unwrap_or_default();
+        let extraction: Extraction = self.extractor.extract(text).await?;
 
         let mut entity_uuids: std::collections::HashMap<(String, String), Uuid> =
             std::collections::HashMap::new();
@@ -188,6 +188,21 @@ impl GraphService {
                     }
                     entity_uuids.insert((ent.name.clone(), ent.entity_type.clone()), uuid);
                     entities.push((ent.clone(), uuid));
+                }
+            }
+        } else if opts.create_relations {
+            for ent in &extraction.entities {
+                let name = ent.name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let existing = match self.entity_repo.find_by_name(&self.database, &name).await {
+                    Ok(rows) => rows.into_iter().next(),
+                    Err(_) => None,
+                };
+                if let Some(rec) = existing {
+                    entity_uuids.insert((name.clone(), ent.entity_type.clone()), rec.uuid);
+                    entities.push((ent.clone(), rec.uuid));
                 }
             }
         }
