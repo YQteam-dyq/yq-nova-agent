@@ -27,16 +27,17 @@ await client.remember({
 });
 
 const { hits } = await client.recall({ query: "SQLite memory", top_k: 5 });
-for (const hit of hits) {
-  console.log(hit.memory.content, hit.final_score);
-}
+const results = hits.map((hit) => ({
+  content: hit.memory.content,
+  score: hit.final_score,
+}));
 
 const page = await client.listMemories({
   filter: { tags_all: ["nova"] },
   sort: "importance_desc",
   limit: 20,
 });
-console.log(page.total, page.items.length);
+const count = page.items.length;
 ```
 
 In a browser the global `fetch` is used automatically. You can inject a custom
