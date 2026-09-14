@@ -500,6 +500,16 @@ mod tests {
         let db = temp_db().await;
         let repo = SqliteEntityRepository::new();
         let ns2 = 999i64;
+        sqlx::query(
+            "INSERT OR IGNORE INTO namespaces (id, uuid, name, description, config_json, \
+             created_at, updated_at) VALUES (?1, ?2, ?3, NULL, '{}', 1, 1)",
+        )
+        .bind(ns2)
+        .bind("00000000-0000-0000-0000-000000000999")
+        .bind("ns-999")
+        .execute(&db.pool)
+        .await
+        .unwrap();
         repo.upsert(
             &db,
             UpsertEntityInput {

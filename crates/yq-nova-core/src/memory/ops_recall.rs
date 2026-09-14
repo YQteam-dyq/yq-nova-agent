@@ -406,15 +406,18 @@ async fn expand_graph_memories(
         return Ok((Vec::new(), BTreeSet::new()));
     }
     let memory_strs: Vec<String> = seed_memory_uuids.iter().map(|u| u.to_string()).collect();
-    let placeholders: Vec<&str> = memory_strs.iter().map(|_| "?").collect();
-    let ph = placeholders.join(",");
+    let first_ph: Vec<String> = (2..=memory_strs.len() + 1).map(|i| format!("?{i}")).collect();
+    let second_ph: Vec<String> =
+        (memory_strs.len() + 2..=2 * memory_strs.len() + 1).map(|i| format!("?{i}")).collect();
+    let first = first_ph.join(",");
+    let second = second_ph.join(",");
     let sql = format!(
         r#"
         SELECT DISTINCT source_uuid FROM relations
-        WHERE memory_uuid IN ({ph}) AND source_uuid IS NOT NULL AND namespace_id = ?1
+        WHERE memory_uuid IN ({first}) AND source_uuid IS NOT NULL AND namespace_id = ?1
         UNION
         SELECT DISTINCT target_uuid FROM relations
-        WHERE memory_uuid IN ({ph}) AND target_uuid IS NOT NULL AND namespace_id = ?1
+        WHERE memory_uuid IN ({second}) AND target_uuid IS NOT NULL AND namespace_id = ?1
         "#
     );
     let mut q = sqlx::query_scalar::<_, String>(&sql).bind(namespace_id);

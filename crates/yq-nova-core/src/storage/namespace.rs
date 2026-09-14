@@ -247,11 +247,6 @@ impl NamespaceRepository for SqliteNamespaceRepository {
                 "namespace.name must not contain leading/trailing whitespace",
             ));
         }
-        if name.eq_ignore_ascii_case(DEFAULT_NAMESPACE_NAME) {
-            return Err(NovaError::validation(format!(
-                "namespace name '{DEFAULT_NAMESPACE_NAME}' is reserved"
-            )));
-        }
         let pool = &db.pool;
         let current = self
             .get_by_name(db, name)
@@ -295,11 +290,28 @@ impl NamespaceRepository for SqliteNamespaceRepository {
         let Some((id,)) = exists else {
             return Ok(DeleteNamespaceOutcome::NotFound);
         };
-        sqlx::query("DELETE FROM namespaces WHERE id = ?1")
+        let mut tx = db.begin().await.map_err(NovaError::from)?;
+        sqlx::query("DELETE FROM entities WHERE namespace_id = ?1")
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(NovaError::storage)?;
+        sqlx::query("DELETE FROM tags WHERE namespace_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(NovaError::storage)?;
+        sqlx::query("DELETE FROM memory_items WHERE namespace_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(NovaError::storage)?;
+        sqlx::query("DELETE FROM namespaces WHERE id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(NovaError::storage)?;
+        tx.commit().await.map_err(NovaError::from)?;
         Ok(DeleteNamespaceOutcome::Deleted(id))
     }
 
@@ -328,4 +340,119 @@ pub fn resolve_namespace_name(map: &Option<serde_json::Value>, aliases: &[(&str,
         }
     }
     DEFAULT_NAMESPACE_NAME.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StorageConfig;
+
+    async fn temp_db() -> Database {
+        let dir = std::env::temp_dir().join(format!("yq-nova-m2-ns-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = StorageConfig {
+            db_path: dir.join("test.db"),
+            pool_max_connections: 2,
+            pool_min_connections: 0,
+            ..StorageConfig::default()
+        };
+        Database::open(cfg).await.expect("open temp db")
+    }
+
+    #[tokio::test]
+    async fn delete_removes_tenant_data() {
+        let db = temp_db().await;
+        let repo = SqliteNamespaceRepository::new();
+        let created = repo
+            .create(
+                &db,
+                CreateNamespaceInput {
+                    name: "team-a".trim(),
+                    description: None,
+                    config: None,
+                },
+            )
+            .await
+            .unwrap();
+        let ns_id = created.id;
+        sqlx::query(
+            "INSERT INTO memory_items (uuid, content, content_hash, namespace_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind("00000000-0000-0000-0000-00000000000a")
+        .bind("data")
+        .bind("h")
+        .bind(ns_id)
+        .bind(1)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO entities (uuid, namespace_id, name, type, created_at, updated_at) VALUES \
+             (?1, ?2, ?3, ?4, ?5, ?5)",
+        )
+        .bind("00000000-0000-0000-0000-0000000000ab")
+        .bind(ns_id)
+        .bind("ent")
+        .bind("person")
+        .bind(1)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO tags (namespace_id, name, created_at) VALUES (?1, ?2, ?3)")
+            .bind(ns_id)
+            .bind("t")
+            .bind(1)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let out = repo.delete(&db, "team-a").await.unwrap();
+        assert!(matches!(out, DeleteNamespaceOutcome::Deleted(id) if id == ns_id));
+
+        let ns: Option<(i64,)> = sqlx::query_as("SELECT id FROM namespaces WHERE id = ?1")
+            .bind(ns_id)
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap();
+        assert!(ns.is_none());
+        let mem: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memory_items WHERE namespace_id = ?1")
+                .bind(ns_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(mem, 0);
+        let ent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities WHERE namespace_id = ?1")
+            .bind(ns_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(ent, 0);
+        let tag: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE namespace_id = ?1")
+            .bind(ns_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(tag, 0);
+    }
+
+    #[tokio::test]
+    async fn default_namespace_accepts_config_update() {
+        let db = temp_db().await;
+        let repo = SqliteNamespaceRepository::new();
+        let upd = repo
+            .update(
+                &db,
+                UpdateNamespaceInput {
+                    name: "default",
+                    description: Some("updated"),
+                    config: Some(&serde_json::json!({"retention_days": 30})),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(upd.description.as_deref(), Some("updated"));
+        assert_eq!(upd.id, DEFAULT_NAMESPACE_ID);
+    }
 }

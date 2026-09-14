@@ -90,7 +90,11 @@ pub async fn auth_middleware(
     let configured = state.server_cfg.auth_token.clone();
     let per_ns_keys = state.server_cfg.namespace_keys.clone();
 
-    if !per_ns_keys.is_empty() {
+    if !per_ns_keys.is_empty()
+        && (configured.is_empty()
+            || provided.is_empty()
+            || !constant_time_eq(configured.as_bytes(), provided.as_bytes()))
+    {
         let bound = per_ns_keys.iter().find(|(_, key)| {
             !key.is_empty()
                 && !provided.is_empty()
@@ -316,5 +320,39 @@ mod tests {
             .unwrap();
         let resp = router.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn global_token_works_alongside_namespace_keys() {
+        let mut keys = std::collections::BTreeMap::new();
+        keys.insert("tenant-a".to_string(), "key-a".to_string());
+        let router = make_router_full("global-secret", keys, &["tenant-a"]).await;
+
+        let req = Request::builder()
+            .uri(HEALTH)
+            .method("GET")
+            .header("authorization", "Bearer global-secret")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = Request::builder()
+            .uri(HEALTH)
+            .method("GET")
+            .header("authorization", "Bearer key-a")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = Request::builder()
+            .uri(HEALTH)
+            .method("GET")
+            .header("authorization", "Bearer neither")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

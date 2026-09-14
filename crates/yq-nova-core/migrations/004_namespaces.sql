@@ -27,7 +27,8 @@ CREATE TABLE entities_new (
     metadata_json   TEXT    NOT NULL DEFAULT '{}',
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
-    UNIQUE(namespace_id, name, type)
+    UNIQUE(namespace_id, name, type),
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id) ON DELETE CASCADE
 );
 INSERT INTO entities_new (id, uuid, namespace_id, name, type, description, metadata_json, created_at, updated_at)
 SELECT id, uuid, namespace_id, name, type, description, metadata_json, created_at, updated_at FROM entities;
@@ -45,7 +46,8 @@ CREATE TABLE relations_new (
     created_at      INTEGER NOT NULL,
     FOREIGN KEY (source_uuid) REFERENCES entities_new(uuid) ON DELETE CASCADE,
     FOREIGN KEY (target_uuid) REFERENCES entities_new(uuid) ON DELETE CASCADE,
-    FOREIGN KEY (memory_uuid) REFERENCES memory_items(uuid) ON DELETE SET NULL
+    FOREIGN KEY (memory_uuid) REFERENCES memory_items(uuid) ON DELETE SET NULL,
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id) ON DELETE CASCADE
 );
 INSERT INTO relations_new (id, uuid, namespace_id, source_uuid, target_uuid, predicate, confidence, memory_uuid, metadata_json, created_at)
 SELECT id, uuid, namespace_id, source_uuid, target_uuid, predicate, confidence, memory_uuid, metadata_json, created_at FROM relations;
@@ -60,7 +62,8 @@ CREATE TABLE tags_new (
     name        TEXT    NOT NULL,
     color       TEXT,
     created_at  INTEGER NOT NULL,
-    UNIQUE(namespace_id, name)
+    UNIQUE(namespace_id, name),
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id) ON DELETE CASCADE
 );
 INSERT INTO tags_new (id, namespace_id, name, color, created_at)
 SELECT id, namespace_id, name, color, created_at FROM tags;
@@ -71,7 +74,8 @@ CREATE TABLE memory_tags_new (
     namespace_id    INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (memory_uuid, tag_id),
     FOREIGN KEY (memory_uuid) REFERENCES memory_items(uuid) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id)      REFERENCES tags_new(id)     ON DELETE CASCADE
+    FOREIGN KEY (tag_id)      REFERENCES tags_new(id)     ON DELETE CASCADE,
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id)  ON DELETE CASCADE
 );
 INSERT INTO memory_tags_new (memory_uuid, tag_id, namespace_id)
 SELECT memory_uuid, tag_id, namespace_id FROM memory_tags;
