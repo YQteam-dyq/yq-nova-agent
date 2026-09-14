@@ -183,33 +183,34 @@ impl VectorStore for SqliteVecVectorStore {
         let k = (k.min(500)) as i32;
         let blob = vec_to_blob(query);
 
-        let rows: Vec<(String, f64)> = sqlx::query_as(&format!(
-            "SELECT memory_uuid, distance FROM {} WHERE embedding MATCH ?1 ORDER BY distance \
-             LIMIT ?2",
-            Self::TABLE
-        ))
-        .bind(blob)
-        .bind(k)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(NovaError::storage)?;
-
-        let mut allowed: std::collections::HashSet<String> = std::collections::HashSet::new();
-        if !rows.is_empty() {
-            let uuids: Vec<String> =
-                sqlx::query_scalar("SELECT uuid FROM memory_items WHERE namespace_id = ?1")
-                    .bind(namespace_id)
-                    .fetch_all(&self.pool)
-                    .await
-                    .map_err(NovaError::storage)?;
-            allowed.extend(uuids);
+        let uuids: Vec<String> =
+            sqlx::query_scalar("SELECT uuid FROM memory_items WHERE namespace_id = ?1")
+                .bind(namespace_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(NovaError::storage)?;
+        if uuids.is_empty() {
+            return Ok(Vec::new());
         }
+
+        let placeholders =
+            (1..=uuids.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+        let match_p = uuids.len() + 1;
+        let limit_p = uuids.len() + 2;
+        let sql = format!(
+            "SELECT memory_uuid, distance FROM {} WHERE memory_uuid IN ({placeholders}) AND \
+             embedding MATCH ?{match_p} ORDER BY distance LIMIT ?{limit_p}",
+            Self::TABLE
+        );
+        let mut q = sqlx::query_as::<_, (String, f64)>(&sql);
+        for u in &uuids {
+            q = q.bind(u);
+        }
+        let rows: Vec<(String, f64)> =
+            q.bind(blob).bind(k).fetch_all(&self.pool).await.map_err(NovaError::storage)?;
 
         let mut hits: Vec<VectorHit> = Vec::with_capacity(rows.len());
         for (mem_s, d) in rows {
-            if !allowed.contains(&mem_s) {
-                continue;
-            }
             let sim = l2_distance_to_cosine(d as f32);
             if sim >= threshold {
                 if let Ok(mem_uuid) = Uuid::parse_str(&mem_s) {

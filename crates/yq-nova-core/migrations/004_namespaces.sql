@@ -11,7 +11,98 @@ CREATE TABLE IF NOT EXISTS namespaces (
 INSERT OR IGNORE INTO namespaces (uuid, name, description, config_json, created_at, updated_at)
 VALUES ('00000000-0000-0000-0000-000000000001', 'default', NULL, '{}', strftime('%s','now'), strftime('%s','now'));
 
+-- =============================================================
+-- Rebuild memory_items so it carries a namespace_id foreign key.
+-- SQLite cannot add a FK via ALTER TABLE, so we drop every table
+-- that references memory_items (embeddings + full-text triggers),
+-- rebuild memory_items with the FK, then restore the dependencies.
+-- =============================================================
+
+-- Sever the full-text sync triggers and the embeddings FK dependency
+-- first so memory_items can be dropped cleanly.
 ALTER TABLE memory_items ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 1;
+DROP TABLE IF EXISTS memory_fts;
+DROP TABLE IF EXISTS embeddings;
+
+CREATE TABLE memory_items_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid            TEXT    NOT NULL UNIQUE,
+    content         TEXT    NOT NULL,
+    content_hash    TEXT    NOT NULL,
+    metadata_json   TEXT    NOT NULL DEFAULT '{}',
+    source          TEXT    NOT NULL DEFAULT 'agent',
+    importance      REAL    NOT NULL DEFAULT 0.5,
+    access_count    INTEGER NOT NULL DEFAULT 0,
+    last_accessed   INTEGER,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER,
+    status          TEXT    NOT NULL DEFAULT 'active',
+    namespace_id    INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (namespace_id) REFERENCES namespaces(id) ON DELETE CASCADE
+);
+INSERT INTO memory_items_new (id, uuid, content, content_hash, metadata_json, source, importance, access_count, last_accessed, created_at, expires_at, status, namespace_id)
+SELECT id, uuid, content, content_hash, metadata_json, source, importance, access_count, last_accessed, created_at, expires_at, status, namespace_id FROM memory_items;
+
+DROP TABLE memory_items;
+ALTER TABLE memory_items_new RENAME TO memory_items;
+
+-- memory_items indexes (recreated after the rebuild)
+CREATE INDEX IF NOT EXISTS idx_memory_created_at  ON memory_items(created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_expires_at  ON memory_items(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_status      ON memory_items(status);
+CREATE INDEX IF NOT EXISTS idx_memory_content_hash ON memory_items(content_hash);
+CREATE INDEX IF NOT EXISTS idx_memory_importance  ON memory_items(importance);
+CREATE INDEX IF NOT EXISTS idx_memory_source      ON memory_items(source);
+CREATE INDEX IF NOT EXISTS idx_memory_last_accessed ON memory_items(last_accessed);
+CREATE INDEX IF NOT EXISTS idx_memory_status_importance ON memory_items(status, importance);
+CREATE INDEX IF NOT EXISTS idx_memory_status_source_created ON memory_items(status, source, created_at);
+
+-- embeddings (restore with FK back to the rebuilt memory_items)
+CREATE TABLE IF NOT EXISTS embeddings (
+    memory_uuid     TEXT    NOT NULL PRIMARY KEY,
+    dims            INTEGER NOT NULL,
+    provider        TEXT    NOT NULL,
+    model           TEXT    NOT NULL,
+    vec_blob        BLOB    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    FOREIGN KEY (memory_uuid) REFERENCES memory_items(uuid) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_dims ON embeddings(dims);
+CREATE INDEX IF NOT EXISTS idx_embeddings_dims_provider ON embeddings(dims, provider);
+
+-- full-text search index + sync triggers (restore for rebuilt memory_items)
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+    content,
+    content       = 'memory_items',
+    content_rowid = 'id',
+    tokenize      = "unicode61 remove_diacritics 2 tokenchars '_'"
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_fts_ai
+AFTER INSERT ON memory_items
+FOR EACH ROW BEGIN
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_fts_au
+AFTER UPDATE OF content ON memory_items
+FOR EACH ROW BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_fts_ad
+AFTER DELETE ON memory_items
+FOR EACH ROW BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+        VALUES('delete', old.id, old.content);
+END;
+
+-- =============================================================
+-- The remaining tenant tables are namespace-aware.
+-- =============================================================
+
 ALTER TABLE entities ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE relations ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE tags ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 1;
@@ -56,6 +147,19 @@ DROP TABLE entities;
 ALTER TABLE entities_new RENAME TO entities;
 ALTER TABLE relations_new RENAME TO relations;
 
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+CREATE INDEX IF NOT EXISTS idx_entities_created_type ON entities(created_at, type);
+CREATE INDEX IF NOT EXISTS idx_rel_source    ON relations(source_uuid);
+CREATE INDEX IF NOT EXISTS idx_rel_target    ON relations(target_uuid);
+CREATE INDEX IF NOT EXISTS idx_rel_predicate ON relations(predicate);
+CREATE INDEX IF NOT EXISTS idx_rel_memory    ON relations(memory_uuid);
+CREATE INDEX IF NOT EXISTS idx_rel_confidence ON relations(confidence);
+CREATE INDEX IF NOT EXISTS idx_rel_src_pred      ON relations(source_uuid, predicate);
+CREATE INDEX IF NOT EXISTS idx_rel_tgt_pred      ON relations(target_uuid, predicate);
+CREATE INDEX IF NOT EXISTS idx_rel_memory_source ON relations(memory_uuid, source_uuid);
+CREATE INDEX IF NOT EXISTS idx_rel_memory_target ON relations(memory_uuid, target_uuid);
+
 CREATE TABLE tags_new (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     namespace_id INTEGER NOT NULL DEFAULT 1,
@@ -84,12 +188,15 @@ DROP TABLE tags;
 ALTER TABLE tags_new RENAME TO tags;
 ALTER TABLE memory_tags_new RENAME TO memory_tags;
 
+CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_memory_tags_reverse ON memory_tags(tag_id, memory_uuid);
+
 CREATE INDEX IF NOT EXISTS idx_memory_items_namespace ON memory_items(namespace_id);
 CREATE INDEX IF NOT EXISTS idx_entities_namespace ON entities(namespace_id);
 CREATE INDEX IF NOT EXISTS idx_entities_namespace_name_type ON entities(namespace_id, name, type);
 CREATE INDEX IF NOT EXISTS idx_relations_namespace ON relations(namespace_id);
 CREATE INDEX IF NOT EXISTS idx_relations_namespace_src ON relations(namespace_id, source_uuid, predicate);
 CREATE INDEX IF NOT EXISTS idx_relations_namespace_tgt ON relations(namespace_id, target_uuid, predicate);
-CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_namespace ON memory_tags(namespace_id, tag_id);
 CREATE INDEX IF NOT EXISTS idx_tags_namespace ON tags(namespace_id, name);
 CREATE INDEX IF NOT EXISTS idx_memory_tags_namespace_uuid ON memory_tags(namespace_id, memory_uuid, tag_id);

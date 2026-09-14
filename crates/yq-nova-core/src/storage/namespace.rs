@@ -254,10 +254,11 @@ impl NamespaceRepository for SqliteNamespaceRepository {
             .ok_or_else(|| NovaError::not_found(format!("namespace {name}")))?;
         let now = Utc::now().timestamp();
         let config_json =
-            input.config.cloned().unwrap_or_else(|| serde_json::json!({})).to_string();
-        let desc = match input.description {
+            input.config.cloned().unwrap_or_else(|| current.config.clone()).to_string();
+        let desc: Option<&str> = match input.description {
             Some(d) if d.trim().is_empty() => None,
-            other => other,
+            Some(d) => Some(d.trim()),
+            None => current.description.as_deref(),
         };
         sqlx::query(
             "UPDATE namespaces SET description = ?1, config_json = ?2, updated_at = ?3 WHERE id = \
@@ -291,6 +292,21 @@ impl NamespaceRepository for SqliteNamespaceRepository {
             return Ok(DeleteNamespaceOutcome::NotFound);
         };
         let mut tx = db.begin().await?;
+        // Clean up sqlite-vec vectors that belong to this namespace before
+        // deleting the tenant rows; otherwise the virtual table keeps orphaned
+        // vectors on disk even though the parent memories are gone.
+        #[cfg(feature = "sqlite-vec")]
+        {
+            sqlx::query(&format!(
+                "DELETE FROM {} WHERE memory_uuid IN (SELECT uuid FROM memory_items WHERE \
+                 namespace_id = ?1)",
+                crate::storage::vector_vec::SqliteVecVectorStore::TABLE
+            ))
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(NovaError::storage)?;
+        }
         sqlx::query("DELETE FROM entities WHERE namespace_id = ?1")
             .bind(id)
             .execute(&mut *tx)
@@ -454,5 +470,52 @@ mod tests {
             .unwrap();
         assert_eq!(upd.description.as_deref(), Some("updated"));
         assert_eq!(upd.id, DEFAULT_NAMESPACE_ID);
+    }
+
+    #[tokio::test]
+    async fn update_preserves_omitted_fields() {
+        let db = temp_db().await;
+        let repo = SqliteNamespaceRepository::new();
+        let created = repo
+            .create(
+                &db,
+                CreateNamespaceInput {
+                    name: "team-b",
+                    description: Some("original desc"),
+                    config: Some(&serde_json::json!({"retention_days": 7, "qps": 10})),
+                },
+            )
+            .await
+            .unwrap();
+
+        // Update only the description; the config must be preserved.
+        let only_desc = repo
+            .update(
+                &db,
+                UpdateNamespaceInput {
+                    name: "team-b",
+                    description: Some("new desc"),
+                    config: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(only_desc.description.as_deref(), Some("new desc"));
+        assert_eq!(only_desc.config, created.config);
+
+        // Update only the config; the description must be preserved.
+        let only_cfg = repo
+            .update(
+                &db,
+                UpdateNamespaceInput {
+                    name: "team-b",
+                    description: None,
+                    config: Some(&serde_json::json!({"retention_days": 30})),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(only_cfg.config, serde_json::json!({"retention_days": 30}));
+        assert_eq!(only_cfg.description.as_deref(), Some("new desc"));
     }
 }
