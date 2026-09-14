@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "yq-nova-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5329,7 +5329,7 @@ dependencies = [
 
 [[package]]
 name = "yq-nova-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5346,7 +5346,7 @@ dependencies = [
 
 [[package]]
 name = "yq-nova-sdk"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5369,7 +5369,7 @@ dependencies = [
 
 [[package]]
 name = "yq-nova-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",

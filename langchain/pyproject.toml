@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-yq-nova"
-version = "0.3.0"
+version = "0.4.0"
 description = "LangChain memory provider and tools for the yq-nova agent memory service"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,7 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "langchain-core>=0.3.0,<1.0",
-    "yq-nova>=0.3",
+    "yq-nova>=0.4",
 ]
 
 [project.urls]

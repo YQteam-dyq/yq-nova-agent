@@ -48,9 +48,11 @@ You're building an agent that needs to:
 | Capability | Description |
 |-----------|-------------|
 | **remember / recall / forget** | Three core operations, HTTP API or Rust SDK |
-| **Semantic search** | Pluggable embedding providers (OpenAI-compatible, mock) |
+| **Semantic search** | Pluggable embedding providers: OpenAI-compatible, Zhipu, Qwen, Baichuan, Jina, and mock |
 | **Graph state** | Entity-relation graph with recursive BFS traversal |
+| **Multi-tenant namespaces** | Isolated, per-namespace data + API keys via the `x-namespace` header |
 | **Hybrid ranking** | RRF fusion of semantic + keyword (FTS5) + graph signals |
+| **Memory quality** | Deduplication, summarization, importance rebalancing and association discovery |
 | **SQLite-backed** | WAL mode, composite indexes, production PRAGMAs |
 | **Background GC** | TTL expiry, importance-based forgetting, graceful shutdown |
 | **CLI subcommands** | `yq-nova remember`, `recall`, `forget`, `stats` — no server needed |
@@ -233,6 +235,57 @@ The MCP server exposes two additional tools: `nova_list` lists memories with tag
 
 ---
 
+## Multi-tenant Namespaces
+
+Since v0.4.0 every memory, tag, entity and relation is scoped to a namespace. A default `default` namespace is always present, so existing single-tenant deployments keep working without changes.
+
+### HTTP API
+
+```bash
+# Create a namespace (admin only)
+curl -X POST http://127.0.0.1:7999/v1/namespaces \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "team-a", "description": "Customer A data"}'
+
+# List namespaces with pagination (admin only)
+curl 'http://127.0.0.1:7999/v1/namespaces?limit=100&offset=0'
+```
+
+### Scoping requests
+
+- Pass the `x-namespace` header to target a namespace: `curl -H 'x-namespace: team-a' ...`.
+- When `x-namespace` is absent, requests target the `default` namespace.
+- Bind per-namespace API keys in `[server].namespace_keys` (see Configuration). Requests carrying a valid namespace key are treated as tenant-scoped and restricted to that namespace; requests with the global `auth_token` are admin-scoped and may access all namespaces.
+
+---
+
+## Memory Quality
+
+The core library ships a `memory::quality` module for keeping memory stores clean and relevant. The methods are available on the Rust SDK (`EmbeddedNova` / HTTP client):
+
+- **Deduplication** — `dedup::detect(...)` finds near-duplicate memories so stale copies can be archived.
+- **Summarization** — `summary::summarize_group(...)` condenses a group of related memories into a single summary entry.
+- **Importance rebalancing** — `importance::rebalance(...)` re-scales importance scores across a namespace.
+- **Association discovery** — `associate::discover(...)` surfaces latent semantic associations between memories.
+
+These primitives complement the recall-time `rebalance_importance` flag and give agents a toolkit for automatic memory hygiene.
+
+---
+
+## LLM Entity-Relation Extraction
+
+Set `graph.extract_llm` to an available chat provider to let your agent extract entities and relations from memory content with an LLM:
+
+```bash
+curl -X POST http://127.0.0.1:7999/v1/graph/extract-and-link \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "yq-nova supports Zhipu and Qwen embedding providers", "opts": {"enabled": true}}'
+```
+
+Entities become graph nodes and relations are linked between them, feeding the existing `traverse` and `entities` / `relations` endpoints so recall can walk the extracted knowledge graph.
+
+---
+
 ## Architecture
 
 ```
@@ -311,6 +364,24 @@ api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
 model = "text-embedding-3-small"
 dimensions = 1536
+
+# Zhipu, Qwen, Baichuan and Jina embedding providers (#9)
+# [embedding.zhipu.default]
+# api_key = "${ZHIPU_API_KEY}"
+# model = "embedding-3"
+# dimensions = 1024
+# [embedding.qwen.default]
+# api_key = "${DASHSCOPE_API_KEY}"
+# model = "text-embedding-v3"
+# [embedding.baichuan.default]
+# api_key = "${BAICHUAN_API_KEY}"
+# [embedding.jina.default]
+# api_key = "${JINA_API_KEY}"
+# model = "jina-embeddings-v3"
+
+# Multi-tenant namespaces (#12): bind per-namespace API keys for tenant isolation.
+[server]
+namespace_keys = { "team-a" = "${TEAM_A_NAMESPACE_KEY}" }
 
 [graph]
 # Set graph.extract_llm to a chat provider name to enable LLM entity-relation extraction.
