@@ -217,6 +217,14 @@ export interface TagRecord {
   memory_count: number;
 }
 
+export interface TagListOutput {
+  total: number;
+  count: number;
+  limit: number;
+  offset: number;
+  items: TagRecord[];
+}
+
 export interface ListTagsParams {
   limit?: number;
   offset?: number;

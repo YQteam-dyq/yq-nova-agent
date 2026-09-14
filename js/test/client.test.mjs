@@ -6,8 +6,11 @@ function recordClient(opts = {}) {
   const calls = [];
   const stubFetch = async (url, init) => {
     calls.push({ url, init });
-    const body = opts.body ?? { ok: true };
     const status = opts.status ?? 200;
+    if (opts.raw !== undefined) {
+      return new Response(opts.raw, { status, headers: { "content-type": "text/plain" } });
+    }
+    const body = opts.body ?? { ok: true };
     return new Response(JSON.stringify(body), {
       status,
       headers: { "content-type": "application/json" },
@@ -48,6 +51,33 @@ test("path segments are URL encoded", async () => {
   const { client, calls } = recordClient({ body: {} });
   await client.renameTag("a/b", "c");
   assert.equal(calls[0].url, "http://127.0.0.1:7999/v1/tags/a%2Fb");
+});
+
+test("listTags returns a paged output", async () => {
+  const { client } = recordClient({
+    body: {
+      total: 1,
+      count: 1,
+      limit: 10,
+      offset: 0,
+      items: [{ id: 1, name: "a", color: null, memory_count: 0 }],
+    },
+  });
+  const out = await client.listTags({ limit: 10 });
+  assert.equal(out.total, 1);
+  assert.equal(out.items.length, 1);
+  assert.equal(out.items[0].name, "a");
+});
+
+test("invalid JSON body throws instead of silently returning empty", async () => {
+  const { client } = recordClient({ raw: "<html>oops</html>", status: 200 });
+  await assert.rejects(
+    () => client.health(),
+    (err) =>
+      err instanceof NovaApiError &&
+      err.status === 200 &&
+      err.message.includes("invalid JSON response body"),
+  );
 });
 
 test("non-2xx responses throw NovaApiError", async () => {

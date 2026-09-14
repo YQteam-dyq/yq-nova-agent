@@ -25,7 +25,7 @@ import type {
   RememberOutput,
   RelationRecord,
   StatsOutput,
-  TagRecord,
+  TagListOutput,
   TraverseInput,
   UpdateMemoryInput,
   UpsertEntityInput,
@@ -133,7 +133,7 @@ export class NovaClient {
   }
 
   listTags(params: ListTagsParams = {}) {
-    return this.request<TagRecord[]>("GET", "/v1/tags", undefined, params);
+    return this.request<TagListOutput>("GET", "/v1/tags", undefined, params);
   }
 
   renameTag(name: string, newName: string) {
@@ -217,16 +217,27 @@ export class NovaClient {
     }
 
     const text = await response.text();
-    const data = text ? safeParse(text) : {};
+    let data: unknown = undefined;
+    let parseFailed = false;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        parseFailed = true;
+      }
+    }
 
-    if (!response.ok) {
-      const err = data as Record<string, unknown>;
-      const code = typeof err.code === "string" ? err.code : `http_${response.status}`;
+    if (!response.ok || parseFailed) {
+      const body: Record<string, unknown> =
+        typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+      const code = typeof body.code === "string" ? body.code : `http_${response.status}`;
       const message =
-        typeof err.message === "string"
-          ? err.message
-          : `HTTP ${response.status} returned no body`;
-      const traceId = typeof err.trace_id === "string" ? err.trace_id : null;
+        typeof body.message === "string"
+          ? body.message
+          : parseFailed
+            ? `invalid JSON response body: ${bodySnippet(text)}`
+            : `HTTP ${response.status} returned no body`;
+      const traceId = typeof body.trace_id === "string" ? body.trace_id : null;
       throw new NovaApiError(code, message, response.status, traceId);
     }
 
@@ -253,10 +264,7 @@ export class NovaClient {
   }
 }
 
-function safeParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {};
-  }
+function bodySnippet(text: string): string {
+  const s = text.replace(/\s+/g, " ").trim();
+  return s.length > 160 ? `${s.slice(0, 160)}...` : s;
 }

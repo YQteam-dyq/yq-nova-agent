@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.memory import BaseMemory
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -107,8 +108,10 @@ def _message_from_role(role: str, content: str) -> BaseMessage:
     return HumanMessage(content=text)
 
 
-class YqNovaMemory:
-    memory_variables: List[str] = ["history"]
+class YqNovaMemory(BaseMemory):
+    namespace: str = "default"
+    tag: str = "langchain"
+    top_k: int = 20
 
     def __init__(
         self,
@@ -117,11 +120,12 @@ class YqNovaMemory:
         tag: str = "langchain",
         top_k: int = 20,
     ) -> None:
-        super().__init__()
-        self.client = client
-        self.namespace = namespace
-        self.tag = tag
-        self.top_k = top_k
+        super().__init__(namespace=namespace, tag=tag, top_k=top_k)
+        self._client = client
+
+    @property
+    def memory_variables(self) -> List[str]:
+        return ["history"]
 
     def _tags(self) -> List[str]:
         return [self.tag, f"{self.tag}:{self.namespace}"]
@@ -131,7 +135,7 @@ class YqNovaMemory:
         text = query if isinstance(query, str) else str(query)
         if not text.strip():
             return {"history": ""}
-        recalled = self.client.recall(
+        recalled = self._client.recall(
             text,
             top_k=self.top_k,
             mode="hybrid",
@@ -148,11 +152,14 @@ class YqNovaMemory:
             lines.append(f"{prefix}: {content}")
         return {"history": "\n".join(lines) if lines else ""}
 
+    async def aload_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return await asyncio.to_thread(self.load_memory_variables, inputs)
+
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
         for key, value in inputs.items():
             if value is None:
                 continue
-            self.client.remember(
+            self._client.remember(
                 str(value),
                 importance=0.5,
                 tags=self._tags(),
@@ -161,16 +168,26 @@ class YqNovaMemory:
         for key, value in outputs.items():
             if value is None:
                 continue
-            self.client.remember(
+            self._client.remember(
                 str(value),
                 importance=0.5,
                 tags=self._tags(),
                 metadata={"role": "ai", "namespace": self.namespace},
             )
 
+    async def asave_context(
+        self,
+        inputs: Dict[str, Any],
+        outputs: Dict[str, str],
+    ) -> None:
+        await asyncio.to_thread(self.save_context, inputs, outputs)
+
     def clear(self) -> None:
-        self.client.forget(
+        self._client.forget(
             filter={"tags_all": self._tags()},
             mode="hard",
             batch_limit=500,
         )
+
+    async def aclear(self) -> None:
+        await asyncio.to_thread(self.clear)
