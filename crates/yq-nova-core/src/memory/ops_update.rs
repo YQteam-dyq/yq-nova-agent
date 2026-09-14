@@ -11,8 +11,9 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInput {
+    pub namespace_id: i64,
     pub content: Option<String>,
     pub importance: Option<f32>,
     pub metadata: Option<serde_json::Value>,
@@ -20,12 +21,26 @@ pub struct UpdateInput {
     pub expires_at: Option<Option<DateTime<Utc>>>,
 }
 
+impl Default for UpdateInput {
+    fn default() -> Self {
+        Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
+            content: None,
+            importance: None,
+            metadata: None,
+            tags: None,
+            expires_at: None,
+        }
+    }
+}
+
 pub async fn update_memory(
     svc: &MemoryService,
     uuid: Uuid,
     input: UpdateInput,
 ) -> NovaResult<MemoryRecord> {
-    let mut record = svc.memory_repo.get_by_uuid(&svc.database, uuid).await?;
+    let ns = input.namespace_id;
+    let mut record = svc.memory_repo.get_by_uuid(&svc.database, ns, uuid).await?;
 
     let mut content_changed = false;
     if let Some(content) = &input.content {
@@ -60,15 +75,19 @@ pub async fn update_memory(
     if content_changed {
         let content_hash = crate::storage::memory::sha256_hex(&record.content);
 
-        if let Some(conflict_uuid) =
-            svc.memory_repo.check_content_hash_conflict(&svc.database, &content_hash, uuid).await?
+        if let Some(conflict_uuid) = svc
+            .memory_repo
+            .check_content_hash_conflict(&svc.database, ns, &content_hash, uuid)
+            .await?
         {
             return Err(NovaError::conflict(format!(
                 "content_hash conflict with memory {conflict_uuid}"
             )));
         }
 
-        svc.memory_repo.update_content(&svc.database, uuid, &record.content, &content_hash).await?;
+        svc.memory_repo
+            .update_content(&svc.database, ns, uuid, &record.content, &content_hash)
+            .await?;
 
         let meta = svc.embedding.meta();
         let vec = svc.embedding.embed_one(&record.content).await?;
@@ -80,36 +99,36 @@ pub async fn update_memory(
                 meta.provider
             )));
         }
-        svc.vector_store.insert_vector(uuid, &meta.provider, &meta.model, &vec).await?;
+        svc.vector_store.insert_vector(ns, uuid, &meta.provider, &meta.model, &vec).await?;
 
         record.content_hash = content_hash;
     }
 
     if input.importance.is_some() {
-        svc.memory_repo.update_importance(&svc.database, uuid, record.importance).await?;
+        svc.memory_repo.update_importance(&svc.database, ns, uuid, record.importance).await?;
     }
 
     if input.metadata.is_some() {
-        svc.memory_repo.update_metadata(&svc.database, uuid, &record.metadata).await?;
+        svc.memory_repo.update_metadata(&svc.database, ns, uuid, &record.metadata).await?;
     }
 
     if input.expires_at.is_some() {
         let expires_ts = record.expires_at.map(|t| t.timestamp());
-        svc.memory_repo.update_expires_at(&svc.database, uuid, expires_ts).await?;
+        svc.memory_repo.update_expires_at(&svc.database, ns, uuid, expires_ts).await?;
     }
 
     if let Some(new_tags) = &input.tags {
-        let old_tags = list_tags_of_memory(&svc.database.pool, uuid).await?;
+        let old_tags = list_tags_of_memory(&svc.database.pool, ns, uuid).await?;
         if !old_tags.is_empty() {
-            detach_tags(&svc.database.pool, uuid, &old_tags).await?;
+            detach_tags(&svc.database.pool, ns, uuid, &old_tags).await?;
         }
         let cleaned: Vec<String> = new_tags.iter().map(|t| t.trim().to_string()).collect();
         if !cleaned.is_empty() {
-            attach_tags(&svc.database.pool, uuid, &cleaned).await?;
+            attach_tags(&svc.database.pool, ns, uuid, &cleaned).await?;
         }
     }
 
-    let updated = svc.memory_repo.get_by_uuid(&svc.database, uuid).await?;
+    let updated = svc.memory_repo.get_by_uuid(&svc.database, ns, uuid).await?;
     Ok(updated)
 }
 

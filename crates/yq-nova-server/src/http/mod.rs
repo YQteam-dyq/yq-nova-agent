@@ -15,6 +15,7 @@ pub mod error;
 pub mod graph;
 pub mod memory;
 pub mod meta;
+pub mod namespaces;
 pub mod state;
 pub mod tags;
 
@@ -48,7 +49,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/graph/entities", post(graph::upsert_entity).get(graph::list_entities))
         .route("/graph/entities/merge", post(graph::merge_entities))
         .route("/graph/relations", post(graph::upsert_relation).get(graph::list_relations))
-        .route("/graph/traverse", post(graph::traverse));
+        .route("/graph/traverse", post(graph::traverse))
+        .route("/namespaces", post(namespaces::create_namespace).get(namespaces::list_namespaces))
+        .route(
+            "/namespaces/:name",
+            get(namespaces::get_namespace)
+                .patch(namespaces::update_namespace)
+                .delete(namespaces::delete_namespace),
+        );
 
     let auth_state = state.clone();
 

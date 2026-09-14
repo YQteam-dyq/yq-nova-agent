@@ -31,6 +31,7 @@ pub enum ForgetTarget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ForgetInput {
+    pub namespace_id: i64,
     pub target: ForgetTarget,
     pub mode: ForgetMode,
 
@@ -42,6 +43,7 @@ pub struct ForgetInput {
 impl Default for ForgetInput {
     fn default() -> Self {
         Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             target: ForgetTarget::Filter(MemoryFilter::default()),
             mode: ForgetMode::Soft,
             gc_graph: false,
@@ -66,20 +68,24 @@ pub struct ForgetOutput {
 }
 
 pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<ForgetOutput> {
+    let ns = input.namespace_id;
     let uuids: Vec<Uuid> = match input.target {
-        ForgetTarget::One(uuid) => match svc.memory_repo.get_by_uuid(&svc.database, uuid).await {
-            Ok(_) => vec![uuid],
-            Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => {
-                return Err(e);
-            },
-            Err(e) => return Err(e),
+        ForgetTarget::One(uuid) => {
+            match svc.memory_repo.get_by_uuid(&svc.database, ns, uuid).await {
+                Ok(_) => vec![uuid],
+                Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => {
+                    return Err(e);
+                },
+                Err(e) => return Err(e),
+            }
         },
-        ForgetTarget::Filter(f) => {
+        ForgetTarget::Filter(mut f) => {
             let limit = input.batch_limit.min(10_000);
             if limit == 0 {
                 return Err(NovaError::validation("forget: batch_limit must be >= 1"));
             }
 
+            f.namespace_id = Some(ns);
             let rows = svc.memory_repo.list(&svc.database, &f, limit + 1, 0).await?;
             let capped = rows.len().min(limit);
             rows.into_iter().take(capped).map(|r| r.uuid).collect()
@@ -98,19 +104,21 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     for u in &uuids {
         match input.mode {
             ForgetMode::Soft => {
-                svc.memory_repo.update_status(&svc.database, *u, MemoryStatus::Deleted).await?;
+                svc.memory_repo.update_status(&svc.database, ns, *u, MemoryStatus::Deleted).await?;
             },
             ForgetMode::Archive => {
-                svc.memory_repo.update_status(&svc.database, *u, MemoryStatus::Archived).await?;
+                svc.memory_repo
+                    .update_status(&svc.database, ns, *u, MemoryStatus::Archived)
+                    .await?;
             },
             ForgetMode::Hard => {
                 if input.gc_graph {
                     relations_cleaned +=
-                        svc.relation_repo.delete_by_memory(&svc.database, *u).await?;
+                        svc.relation_repo.delete_by_memory(&svc.database, ns, *u).await?;
                 }
 
-                svc.vector_store.delete_vector(*u).await.ok();
-                svc.memory_repo.delete(&svc.database, *u).await?;
+                svc.vector_store.delete_vector(ns, *u).await.ok();
+                svc.memory_repo.delete(&svc.database, ns, *u).await?;
             },
         }
         affected += 1;
@@ -119,7 +127,7 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     let mut gc_entities = 0usize;
     let mut gc_relations = 0usize;
     if input.gc_graph {
-        let (ent, rel) = gc_orphan_entities(svc).await.unwrap_or((0, 0));
+        let (ent, rel) = gc_orphan_entities(svc, ns).await.unwrap_or((0, 0));
         gc_entities = ent;
         gc_relations = rel;
     }
@@ -139,11 +147,11 @@ pub async fn forget(svc: &MemoryService, input: ForgetInput) -> NovaResult<Forge
     })
 }
 
-async fn gc_orphan_entities(svc: &MemoryService) -> NovaResult<(usize, usize)> {
+async fn gc_orphan_entities(svc: &MemoryService, ns: i64) -> NovaResult<(usize, usize)> {
     use crate::storage::entity::EntityRecord;
 
     let all: Vec<EntityRecord> =
-        svc.entity_repo.list(&svc.database, None, None, i64::MAX as usize, 0).await?;
+        svc.entity_repo.list(&svc.database, ns, None, None, i64::MAX as usize, 0).await?;
 
     let mut deleted_ent = 0usize;
     let deleted_rel = 0usize;
@@ -151,10 +159,12 @@ async fn gc_orphan_entities(svc: &MemoryService) -> NovaResult<(usize, usize)> {
         if e.r#type != "unknown" {
             continue;
         }
-        let out = svc.relation_repo.list_outgoing(&svc.database, e.uuid, None, usize::MAX).await?;
-        let inc = svc.relation_repo.list_incoming(&svc.database, e.uuid, None, usize::MAX).await?;
+        let out =
+            svc.relation_repo.list_outgoing(&svc.database, ns, e.uuid, None, usize::MAX).await?;
+        let inc =
+            svc.relation_repo.list_incoming(&svc.database, ns, e.uuid, None, usize::MAX).await?;
         if out.is_empty() && inc.is_empty() {
-            match svc.entity_repo.delete(&svc.database, e.uuid).await {
+            match svc.entity_repo.delete(&svc.database, ns, e.uuid).await {
                 Ok(()) => deleted_ent += 1,
                 Err(err) if matches!(err.code(), ErrorCode::NotFound) => {},
                 Err(err) => return Err(err),
@@ -176,6 +186,8 @@ mod tests {
             Database, MemoryStatus, entity::UpsertEntityInput, relation::InsertRelationInput,
         },
     };
+
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-forget-{}", Uuid::new_v4()));
@@ -327,6 +339,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "Source",
                     r#type: "test",
                     description: None,
@@ -341,6 +354,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "Target",
                     r#type: "test",
                     description: None,
@@ -354,6 +368,7 @@ mod tests {
             .insert(
                 &svc.database,
                 InsertRelationInput {
+                    namespace_id: NS,
                     source_uuid: src,
                     target_uuid: tgt,
                     predicate: "related_to",
@@ -386,7 +401,7 @@ mod tests {
         assert_eq!(out.affected_memories, 1);
         assert_eq!(out.relations_cleaned, 1);
         let rels =
-            svc.relation_repo.list_outgoing(&svc.database, src_uuid, None, 100).await.unwrap();
+            svc.relation_repo.list_outgoing(&svc.database, NS, src_uuid, None, 100).await.unwrap();
         assert!(rels.is_empty(), "relation should have been deleted");
     }
 

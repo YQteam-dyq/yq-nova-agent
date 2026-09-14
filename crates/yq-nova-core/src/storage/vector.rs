@@ -19,16 +19,18 @@ pub trait VectorStore: Send + Sync + std::fmt::Debug {
 
     async fn insert_vector(
         &self,
+        namespace_id: i64,
         memory_uuid: Uuid,
         provider: &str,
         model: &str,
         vec: &[f32],
     ) -> NovaResult<()>;
 
-    async fn delete_vector(&self, memory_uuid: Uuid) -> NovaResult<()>;
+    async fn delete_vector(&self, namespace_id: i64, memory_uuid: Uuid) -> NovaResult<()>;
 
     async fn knn_search(
         &self,
+        namespace_id: i64,
         query: &[f32],
         k: usize,
         threshold: f32,
@@ -132,6 +134,7 @@ impl VectorStore for SqliteVectorStore {
 
     async fn insert_vector(
         &self,
+        namespace_id: i64,
         memory_uuid: Uuid,
         provider: &str,
         model: &str,
@@ -148,6 +151,16 @@ impl VectorStore for SqliteVectorStore {
         let blob = vec_to_blob(vec);
         let now = chrono::Utc::now().timestamp();
         let mem_s = memory_uuid.to_string();
+        let owns: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2")
+                .bind(&mem_s)
+                .bind(namespace_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(NovaError::storage)?;
+        if owns.is_none() {
+            return Err(NovaError::not_found(format!("memory {memory_uuid} in namespace")));
+        }
         sqlx::query(
             "INSERT INTO embeddings (memory_uuid, dims, provider, model, vec_blob, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(memory_uuid) DO UPDATE SET dims = \
@@ -166,18 +179,23 @@ impl VectorStore for SqliteVectorStore {
         Ok(())
     }
 
-    async fn delete_vector(&self, memory_uuid: Uuid) -> NovaResult<()> {
+    async fn delete_vector(&self, namespace_id: i64, memory_uuid: Uuid) -> NovaResult<()> {
         let mem_s = memory_uuid.to_string();
-        sqlx::query("DELETE FROM embeddings WHERE memory_uuid = ?1")
-            .bind(&mem_s)
-            .execute(&self.pool)
-            .await
-            .map_err(NovaError::storage)?;
+        sqlx::query(
+            "DELETE FROM embeddings WHERE memory_uuid = ?1 AND EXISTS (SELECT 1 FROM memory_items \
+             m WHERE m.uuid = embeddings.memory_uuid AND m.namespace_id = ?2)",
+        )
+        .bind(&mem_s)
+        .bind(namespace_id)
+        .execute(&self.pool)
+        .await
+        .map_err(NovaError::storage)?;
         Ok(())
     }
 
     async fn knn_search(
         &self,
+        namespace_id: i64,
         query: &[f32],
         k: usize,
         threshold: f32,
@@ -185,12 +203,15 @@ impl VectorStore for SqliteVectorStore {
         check_dims(self.dims, query)?;
         let k = k.min(500);
 
-        let rows: Vec<(String, Vec<u8>)> =
-            sqlx::query_as("SELECT memory_uuid, vec_blob FROM embeddings WHERE dims = ?1")
-                .bind(self.dims as i64)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(NovaError::storage)?;
+        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
+            "SELECT e.memory_uuid, e.vec_blob FROM embeddings e INNER JOIN memory_items m ON \
+             m.uuid = e.memory_uuid WHERE e.dims = ?1 AND m.namespace_id = ?2",
+        )
+        .bind(self.dims as i64)
+        .bind(namespace_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(NovaError::storage)?;
 
         let mut hits: Vec<VectorHit> = Vec::with_capacity(rows.len().min(k * 2));
         for (mem_s, blob) in rows {
@@ -262,12 +283,13 @@ mod tests {
             .uuid();
         let store = SqliteVectorStore::with_db(&db, 4);
         let v = [0.1f32, 0.2, 0.3, 0.4];
-        store.insert_vector(muuid, "test", "m1", &v).await.unwrap();
+        const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+        store.insert_vector(NS, muuid, "test", "m1", &v).await.unwrap();
 
-        store.insert_vector(muuid, "test2", "m2", &v).await.unwrap();
-        store.delete_vector(muuid).await.unwrap();
+        store.insert_vector(NS, muuid, "test2", "m2", &v).await.unwrap();
+        store.delete_vector(NS, muuid).await.unwrap();
 
-        let hits = store.knn_search(&v, 10, -1.0).await.unwrap();
+        let hits = store.knn_search(NS, &v, 10, -1.0).await.unwrap();
         assert!(hits.iter().all(|h| h.memory_uuid != muuid));
     }
 
@@ -276,6 +298,7 @@ mod tests {
         let db = temp_db().await;
         let mem = SqliteMemoryRepository::new();
         let store = SqliteVectorStore::with_db(&db, 3);
+        const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
 
         let u0 = mem
             .insert(
@@ -288,7 +311,7 @@ mod tests {
             .await
             .unwrap()
             .uuid();
-        store.insert_vector(u0, "t", "m", &[1.0_f32, 0.0, 0.0]).await.unwrap();
+        store.insert_vector(NS, u0, "t", "m", &[1.0_f32, 0.0, 0.0]).await.unwrap();
         let rows: Vec<(String, Vec<u8>, i64)> =
             sqlx::query_as("SELECT memory_uuid, vec_blob, dims FROM embeddings")
                 .fetch_all(&db.pool)
@@ -321,15 +344,15 @@ mod tests {
             .await
             .unwrap()
             .uuid();
-        store.insert_vector(u1, "t", "m", &[-1.0_f32, 0.0, 0.0]).await.unwrap();
-        store.insert_vector(u2, "t", "m", &[0.7_f32, 0.7, 0.0]).await.unwrap();
+        store.insert_vector(NS, u1, "t", "m", &[-1.0_f32, 0.0, 0.0]).await.unwrap();
+        store.insert_vector(NS, u2, "t", "m", &[0.7_f32, 0.7, 0.0]).await.unwrap();
 
         let q = [1.0f32, 0.0, 0.0];
 
-        let all3 = store.knn_search(&q, 10, -2.0).await.unwrap();
+        let all3 = store.knn_search(NS, &q, 10, -2.0).await.unwrap();
         assert_eq!(all3.len(), 3, "all 3 vectors should pass threshold=-2, got {all3:?}");
 
-        let nonneg = store.knn_search(&q, 5, 0.0).await.unwrap();
+        let nonneg = store.knn_search(NS, &q, 5, 0.0).await.unwrap();
         assert_eq!(nonneg.len(), 2, "nonneg count wrong: {nonneg:?}");
         let top = &nonneg[0];
         assert_eq!(top.memory_uuid, u0, "top should be u0, got sim={}", top.similarity);
@@ -340,7 +363,7 @@ mod tests {
         );
         assert_eq!(nonneg[1].memory_uuid, u2);
 
-        let hi = store.knn_search(&q, 5, 0.9).await.unwrap();
+        let hi = store.knn_search(NS, &q, 5, 0.9).await.unwrap();
         assert_eq!(hi.len(), 1);
         assert_eq!(hi[0].memory_uuid, u0);
     }

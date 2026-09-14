@@ -392,7 +392,9 @@ async fn tool_traverse(
         max_depth,
         ..Default::default()
     };
-    let nodes = graph.traverse_graph(uuid, opts).await?;
+    let nodes = graph
+        .traverse_graph(yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID, uuid, opts)
+        .await?;
     Ok(serde_json::to_value(nodes)?)
 }
 
@@ -448,6 +450,7 @@ async fn tool_tags(
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as u32;
     let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let input = TagListInput {
+        namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
         limit,
         offset,
     };

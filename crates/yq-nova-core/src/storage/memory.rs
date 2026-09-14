@@ -14,6 +14,7 @@ use crate::{
 pub struct MemoryRecord {
     pub id: i64,
     pub uuid: Uuid,
+    pub namespace_id: i64,
     pub content: String,
     pub content_hash: String,
     pub metadata: serde_json::Value,
@@ -29,6 +30,7 @@ pub struct MemoryRecord {
 
 #[derive(Debug, Clone)]
 pub struct InsertMemoryInput<'a> {
+    pub namespace_id: i64,
     pub content: &'a str,
     pub source: MemorySource,
     pub importance: f32,
@@ -40,6 +42,7 @@ pub struct InsertMemoryInput<'a> {
 impl<'a> Default for InsertMemoryInput<'a> {
     fn default() -> Self {
         Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: "",
             source: MemorySource::Agent,
             importance: 0.5,
@@ -82,24 +85,37 @@ pub trait MemoryRepository: Repository<MemoryRecord> {
         db: &Database,
         input: InsertMemoryInput<'_>,
     ) -> NovaResult<InsertOutcome>;
-    async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<MemoryRecord>;
+    async fn get_by_uuid(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        uuid: Uuid,
+    ) -> NovaResult<MemoryRecord>;
     async fn update_status(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         status: MemoryStatus,
     ) -> NovaResult<()>;
     async fn update_metadata(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         metadata: &serde_json::Value,
     ) -> NovaResult<()>;
-    async fn update_importance(&self, db: &Database, uuid: Uuid, importance: f32)
-    -> NovaResult<()>;
+    async fn update_importance(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        uuid: Uuid,
+        importance: f32,
+    ) -> NovaResult<()>;
     async fn update_content(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         content: &str,
         content_hash: &str,
@@ -107,11 +123,12 @@ pub trait MemoryRepository: Repository<MemoryRecord> {
     async fn update_expires_at(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         expires_at: Option<i64>,
     ) -> NovaResult<()>;
-    async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
-    async fn mark_accessed(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
+    async fn delete(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()>;
+    async fn mark_accessed(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()>;
     async fn list(
         &self,
         db: &Database,
@@ -170,9 +187,11 @@ impl MemoryRepository for SqliteMemoryRepository {
         let pool = &db.pool;
 
         let existing: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND status != 'deleted'",
+            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND namespace_id = ?2 AND \
+             status != 'deleted'",
         )
         .bind(&content_hash)
+        .bind(input.namespace_id)
         .fetch_optional(pool)
         .await
         .map_err(NovaError::storage)?;
@@ -181,7 +200,7 @@ impl MemoryRepository for SqliteMemoryRepository {
             let existing_uuid = Uuid::parse_str(&existing_uuid_s)
                 .map_err(|e| NovaError::storage_msg(format!("bad existing uuid: {e}")))?;
             if !input.tags.is_empty() {
-                attach_tags(pool, existing_uuid, input.tags).await?;
+                attach_tags(pool, input.namespace_id, existing_uuid, input.tags).await?;
             }
             return Ok(InsertOutcome::Duplicate(existing_uuid, ()));
         }
@@ -193,11 +212,12 @@ impl MemoryRepository for SqliteMemoryRepository {
 
         sqlx::query(
             "INSERT INTO memory_items (
-                uuid, content, content_hash, metadata_json, source, importance,
+                uuid, namespace_id, content, content_hash, metadata_json, source, importance,
                 access_count, last_accessed, created_at, expires_at, status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(uuid.to_string())
+        .bind(input.namespace_id)
         .bind(input.content)
         .bind(&content_hash)
         .bind(metadata_json.to_string())
@@ -213,40 +233,50 @@ impl MemoryRepository for SqliteMemoryRepository {
         .map_err(NovaError::storage)?;
 
         if !input.tags.is_empty() {
-            attach_tags(pool, uuid, input.tags).await?;
+            attach_tags(pool, input.namespace_id, uuid, input.tags).await?;
         }
 
         Ok(InsertOutcome::Inserted(uuid))
     }
 
-    async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<MemoryRecord> {
+    async fn get_by_uuid(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        uuid: Uuid,
+    ) -> NovaResult<MemoryRecord> {
         let row = sqlx::query(
-            "SELECT id, uuid, content, content_hash, metadata_json, source, importance,
-                    access_count, last_accessed, created_at, expires_at, status
-             FROM memory_items WHERE uuid = ?1",
+            "SELECT id, uuid, namespace_id, content, content_hash, metadata_json, source, \
+             importance, access_count, last_accessed, created_at, expires_at, status
+             FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2",
         )
         .bind(uuid.to_string())
+        .bind(namespace_id)
         .fetch_optional(&db.pool)
         .await
         .map_err(NovaError::storage)?;
         let row = row.ok_or_else(|| NovaError::not_found(format!("memory {uuid}")))?;
         let mut rec = row_to_memory(&row)?;
-        rec.tags = load_tags_for(&db.pool, uuid).await?;
+        rec.tags = load_tags_for(&db.pool, namespace_id, uuid).await?;
         Ok(rec)
     }
 
     async fn update_status(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         status: MemoryStatus,
     ) -> NovaResult<()> {
-        let res = sqlx::query("UPDATE memory_items SET status = ?1 WHERE uuid = ?2")
-            .bind(status.as_str())
-            .bind(uuid.to_string())
-            .execute(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
+        let res = sqlx::query(
+            "UPDATE memory_items SET status = ?1 WHERE uuid = ?2 AND namespace_id = ?3",
+        )
+        .bind(status.as_str())
+        .bind(uuid.to_string())
+        .bind(namespace_id)
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("memory {uuid}")));
         }
@@ -256,15 +286,19 @@ impl MemoryRepository for SqliteMemoryRepository {
     async fn update_metadata(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         metadata: &serde_json::Value,
     ) -> NovaResult<()> {
-        let res = sqlx::query("UPDATE memory_items SET metadata_json = ?1 WHERE uuid = ?2")
-            .bind(metadata.to_string())
-            .bind(uuid.to_string())
-            .execute(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
+        let res = sqlx::query(
+            "UPDATE memory_items SET metadata_json = ?1 WHERE uuid = ?2 AND namespace_id = ?3",
+        )
+        .bind(metadata.to_string())
+        .bind(uuid.to_string())
+        .bind(namespace_id)
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("memory {uuid}")));
         }
@@ -274,18 +308,22 @@ impl MemoryRepository for SqliteMemoryRepository {
     async fn update_importance(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         importance: f32,
     ) -> NovaResult<()> {
         if !(0.0..=1.0).contains(&importance) {
             return Err(NovaError::validation("memory.importance must be in [0.0, 1.0]"));
         }
-        let res = sqlx::query("UPDATE memory_items SET importance = ?1 WHERE uuid = ?2")
-            .bind(importance as f64)
-            .bind(uuid.to_string())
-            .execute(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
+        let res = sqlx::query(
+            "UPDATE memory_items SET importance = ?1 WHERE uuid = ?2 AND namespace_id = ?3",
+        )
+        .bind(importance as f64)
+        .bind(uuid.to_string())
+        .bind(namespace_id)
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("memory {uuid}")));
         }
@@ -295,18 +333,22 @@ impl MemoryRepository for SqliteMemoryRepository {
     async fn update_content(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         content: &str,
         content_hash: &str,
     ) -> NovaResult<()> {
-        let res =
-            sqlx::query("UPDATE memory_items SET content = ?1, content_hash = ?2 WHERE uuid = ?3")
-                .bind(content)
-                .bind(content_hash)
-                .bind(uuid.to_string())
-                .execute(&db.pool)
-                .await
-                .map_err(NovaError::storage)?;
+        let res = sqlx::query(
+            "UPDATE memory_items SET content = ?1, content_hash = ?2 WHERE uuid = ?3 AND \
+             namespace_id = ?4",
+        )
+        .bind(content)
+        .bind(content_hash)
+        .bind(uuid.to_string())
+        .bind(namespace_id)
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
         if res.rows_affected() == 0 {
             return Err(NovaError::not_found(format!("memory {uuid}")));
         }
@@ -316,12 +358,29 @@ impl MemoryRepository for SqliteMemoryRepository {
     async fn update_expires_at(
         &self,
         db: &Database,
+        namespace_id: i64,
         uuid: Uuid,
         expires_at: Option<i64>,
     ) -> NovaResult<()> {
-        let res = sqlx::query("UPDATE memory_items SET expires_at = ?1 WHERE uuid = ?2")
-            .bind(expires_at)
+        let res = sqlx::query(
+            "UPDATE memory_items SET expires_at = ?1 WHERE uuid = ?2 AND namespace_id = ?3",
+        )
+        .bind(expires_at)
+        .bind(uuid.to_string())
+        .bind(namespace_id)
+        .execute(&db.pool)
+        .await
+        .map_err(NovaError::storage)?;
+        if res.rows_affected() == 0 {
+            return Err(NovaError::not_found(format!("memory {uuid}")));
+        }
+        Ok(())
+    }
+
+    async fn delete(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()> {
+        let res = sqlx::query("DELETE FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2")
             .bind(uuid.to_string())
+            .bind(namespace_id)
             .execute(&db.pool)
             .await
             .map_err(NovaError::storage)?;
@@ -331,28 +390,17 @@ impl MemoryRepository for SqliteMemoryRepository {
         Ok(())
     }
 
-    async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()> {
-        let res = sqlx::query("DELETE FROM memory_items WHERE uuid = ?1")
-            .bind(uuid.to_string())
-            .execute(&db.pool)
-            .await
-            .map_err(NovaError::storage)?;
-        if res.rows_affected() == 0 {
-            return Err(NovaError::not_found(format!("memory {uuid}")));
-        }
-        Ok(())
-    }
-
-    async fn mark_accessed(&self, db: &Database, uuid: Uuid) -> NovaResult<()> {
+    async fn mark_accessed(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()> {
         let now = Utc::now().timestamp();
         sqlx::query(
             "UPDATE memory_items
                 SET access_count = access_count + 1,
                     last_accessed = ?1
-              WHERE uuid = ?2",
+              WHERE uuid = ?2 AND namespace_id = ?3",
         )
         .bind(now)
         .bind(uuid.to_string())
+        .bind(namespace_id)
         .execute(&db.pool)
         .await
         .map_err(NovaError::storage)?;
@@ -394,9 +442,10 @@ impl MemoryRepository for SqliteMemoryRepository {
             q.bind(limit).bind(offset).fetch_all(&db.pool).await.map_err(NovaError::storage)?;
 
         let mut out = Vec::with_capacity(rows.len());
+        let ns = filter.namespace_id.unwrap_or(crate::storage::namespace::DEFAULT_NAMESPACE_ID);
         for row in rows {
             let mut rec = row_to_memory(&row)?;
-            rec.tags = load_tags_for(&db.pool, rec.uuid).await?;
+            rec.tags = load_tags_for(&db.pool, ns, rec.uuid).await?;
             out.push(rec);
         }
         Ok(out)
@@ -421,14 +470,16 @@ impl SqliteMemoryRepository {
     pub async fn check_content_hash_conflict(
         &self,
         db: &Database,
+        namespace_id: i64,
         content_hash: &str,
         exclude_uuid: Uuid,
     ) -> NovaResult<Option<Uuid>> {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT uuid FROM memory_items WHERE content_hash = ?1 AND uuid != ?2 AND status != \
-             'deleted'",
+            "SELECT uuid FROM memory_items WHERE content_hash = ?1 AND namespace_id = ?2 AND uuid \
+             != ?3 AND status != 'deleted'",
         )
         .bind(content_hash)
+        .bind(namespace_id)
         .bind(exclude_uuid.to_string())
         .fetch_optional(&db.pool)
         .await
@@ -450,14 +501,15 @@ struct BuiltQuery {
 }
 
 fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
-    let cols_list: &str = "m.id, m.uuid, m.content, m.content_hash, m.metadata_json, m.source, \
-                           m.importance, m.access_count, m.last_accessed, m.created_at, \
-                           m.expires_at, m.status";
+    let cols_list: &str = "m.id, m.uuid, m.namespace_id, m.content, m.content_hash, \
+                           m.metadata_json, m.source, m.importance, m.access_count, \
+                           m.last_accessed, m.created_at, m.expires_at, m.status";
 
     let mut joins: String = String::new();
     let mut where_clauses: Vec<String> = Vec::new();
     let mut group_by_having: Option<String> = None;
-    let mut binds: Vec<BindValue> = Vec::new();
+    let mut join_binds: Vec<BindValue> = Vec::new();
+    let mut where_binds: Vec<BindValue> = Vec::new();
 
     fn qmarks(n: usize) -> String {
         let mut out = String::with_capacity(2 * n);
@@ -470,10 +522,15 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
         out
     }
 
+    if let Some(ns) = filter.namespace_id {
+        where_binds.push(BindValue::Int(ns));
+        where_clauses.push("m.namespace_id = ?".into());
+    }
+
     if let Some(tags) = &filter.tags_all {
         if !tags.is_empty() {
             for t in tags {
-                binds.push(BindValue::Text(t.clone()));
+                join_binds.push(BindValue::Text(t.clone()));
             }
             joins.push_str(&format!(
                 " INNER JOIN memory_tags mta ON mta.memory_uuid = m.uuid INNER JOIN tags ta ON \
@@ -488,7 +545,7 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
     if let Some(statuses) = &filter.status_in {
         if !statuses.is_empty() {
             for s in statuses {
-                binds.push(BindValue::Text(s.as_str().to_string()));
+                where_binds.push(BindValue::Text(s.as_str().to_string()));
             }
             where_clauses.push(format!("m.status IN ({})", qmarks(statuses.len())));
         }
@@ -499,45 +556,45 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
     if let Some(sources) = &filter.source_in {
         if !sources.is_empty() {
             for s in sources {
-                binds.push(BindValue::Text(s.as_str().to_string()));
+                where_binds.push(BindValue::Text(s.as_str().to_string()));
             }
             where_clauses.push(format!("m.source IN ({})", qmarks(sources.len())));
         }
     }
     if let Some(after) = filter.created_after {
-        binds.push(BindValue::Int(after.timestamp()));
+        where_binds.push(BindValue::Int(after.timestamp()));
         where_clauses.push("m.created_at > ?".into());
     }
     if let Some(before) = filter.created_before {
-        binds.push(BindValue::Int(before.timestamp()));
+        where_binds.push(BindValue::Int(before.timestamp()));
         where_clauses.push("m.created_at < ?".into());
     }
     if let Some(min) = filter.importance_min {
-        binds.push(BindValue::Real(min as f64));
+        where_binds.push(BindValue::Real(min as f64));
         where_clauses.push("m.importance >= ?".into());
     }
     if let Some(max) = filter.importance_max {
-        binds.push(BindValue::Real(max as f64));
+        where_binds.push(BindValue::Real(max as f64));
         where_clauses.push("m.importance <= ?".into());
     }
     if let Some(lt) = filter.access_count_lt {
-        binds.push(BindValue::Int(lt));
+        where_binds.push(BindValue::Int(lt));
         where_clauses.push("m.access_count < ?".into());
     }
 
     if let Some(before) = filter.last_accessed_before {
-        binds.push(BindValue::Int(before.timestamp()));
+        where_binds.push(BindValue::Int(before.timestamp()));
         where_clauses.push("COALESCE(m.last_accessed, m.created_at) < ?".into());
     }
     if let Some(after) = filter.last_accessed_after {
-        binds.push(BindValue::Int(after.timestamp()));
+        where_binds.push(BindValue::Int(after.timestamp()));
         where_clauses.push("COALESCE(m.last_accessed, m.created_at) > ?".into());
     }
 
     if let Some(tags) = &filter.tags_any {
         if !tags.is_empty() {
             for t in tags {
-                binds.push(BindValue::Text(t.clone()));
+                where_binds.push(BindValue::Text(t.clone()));
             }
             where_clauses.push(format!(
                 "EXISTS (SELECT 1 FROM memory_tags mte INNER JOIN tags te ON te.id = mte.tag_id \
@@ -564,9 +621,10 @@ fn build_filter(filter: &MemoryFilter, count_only: bool) -> BuiltQuery {
         format!("SELECT {cols_list} {from_with_joins} WHERE {wc}")
     };
 
+    join_binds.extend(where_binds);
     BuiltQuery {
         sql,
-        binds,
+        binds: join_binds,
     }
 }
 
@@ -582,6 +640,7 @@ fn row_to_memory(row: &SqliteRow) -> NovaResult<MemoryRecord> {
     let uuid_s: String = row.try_get("uuid").map_err(NovaError::storage)?;
     let uuid =
         Uuid::parse_str(&uuid_s).map_err(|e| NovaError::storage_msg(format!("bad uuid: {e}")))?;
+    let namespace_id: i64 = row.try_get("namespace_id").map_err(NovaError::storage)?;
     let content: String = row.try_get("content").map_err(NovaError::storage)?;
     let content_hash: String = row.try_get("content_hash").map_err(NovaError::storage)?;
     let meta_s: String = row.try_get("metadata_json").map_err(NovaError::storage)?;
@@ -600,6 +659,7 @@ fn row_to_memory(row: &SqliteRow) -> NovaResult<MemoryRecord> {
     Ok(MemoryRecord {
         id,
         uuid,
+        namespace_id,
         content,
         content_hash,
         metadata,
@@ -619,14 +679,19 @@ fn ts_to_dt(ts: i64) -> NovaResult<DateTime<Utc>> {
         .ok_or_else(|| NovaError::storage_msg(format!("bad timestamp {ts}")))
 }
 
-async fn load_tags_for(pool: &SqlitePool, uuid: Uuid) -> NovaResult<Vec<String>> {
+async fn load_tags_for(
+    pool: &SqlitePool,
+    namespace_id: i64,
+    uuid: Uuid,
+) -> NovaResult<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT t.name FROM tags t
             INNER JOIN memory_tags mt ON mt.tag_id = t.id
-           WHERE mt.memory_uuid = ?1
+           WHERE mt.memory_uuid = ?1 AND mt.namespace_id = ?2
         ORDER BY t.name",
     )
     .bind(uuid.to_string())
+    .bind(namespace_id)
     .fetch_all(pool)
     .await
     .map_err(NovaError::storage)?;
@@ -635,6 +700,7 @@ async fn load_tags_for(pool: &SqlitePool, uuid: Uuid) -> NovaResult<Vec<String>>
 
 pub(crate) async fn attach_tags(
     pool: &SqlitePool,
+    namespace_id: i64,
     memory_uuid: Uuid,
     tags: &[String],
 ) -> NovaResult<()> {
@@ -644,29 +710,39 @@ pub(crate) async fn attach_tags(
         if tag.is_empty() {
             continue;
         }
-        sqlx::query("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?1, ?2)")
-            .bind(tag)
-            .bind(Utc::now().timestamp())
-            .execute(pool)
-            .await
-            .map_err(NovaError::storage)?;
-        let (tag_id,): (i64,) = sqlx::query_as("SELECT id FROM tags WHERE name = ?1")
-            .bind(tag)
-            .fetch_one(pool)
-            .await
-            .map_err(NovaError::storage)?;
-        sqlx::query("INSERT OR IGNORE INTO memory_tags (memory_uuid, tag_id) VALUES (?1, ?2)")
-            .bind(&mem)
-            .bind(tag_id)
-            .execute(pool)
-            .await
-            .map_err(NovaError::storage)?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO tags (name, created_at, namespace_id) VALUES (?1, ?2, ?3)",
+        )
+        .bind(tag)
+        .bind(Utc::now().timestamp())
+        .bind(namespace_id)
+        .execute(pool)
+        .await
+        .map_err(NovaError::storage)?;
+        let (tag_id,): (i64,) =
+            sqlx::query_as("SELECT id FROM tags WHERE name = ?1 AND namespace_id = ?2")
+                .bind(tag)
+                .bind(namespace_id)
+                .fetch_one(pool)
+                .await
+                .map_err(NovaError::storage)?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO memory_tags (memory_uuid, tag_id, namespace_id) VALUES (?1, \
+             ?2, ?3)",
+        )
+        .bind(&mem)
+        .bind(tag_id)
+        .bind(namespace_id)
+        .execute(pool)
+        .await
+        .map_err(NovaError::storage)?;
     }
     Ok(())
 }
 
 pub(crate) async fn detach_tags(
     pool: &SqlitePool,
+    namespace_id: i64,
     memory_uuid: Uuid,
     tags: &[String],
 ) -> NovaResult<()> {
@@ -679,9 +755,11 @@ pub(crate) async fn detach_tags(
         sqlx::query(
             "DELETE FROM memory_tags
                 WHERE memory_uuid = ?1
-                  AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
+                  AND namespace_id = ?2
+                  AND tag_id = (SELECT id FROM tags WHERE name = ?3 AND namespace_id = ?2)",
         )
         .bind(&mem)
+        .bind(namespace_id)
         .bind(tag)
         .execute(pool)
         .await
@@ -692,9 +770,10 @@ pub(crate) async fn detach_tags(
 
 pub(crate) async fn list_tags_of_memory(
     pool: &SqlitePool,
+    namespace_id: i64,
     memory_uuid: Uuid,
 ) -> NovaResult<Vec<String>> {
-    load_tags_for(pool, memory_uuid).await
+    load_tags_for(pool, namespace_id, memory_uuid).await
 }
 
 #[cfg(test)]
@@ -715,6 +794,8 @@ mod tests {
         Database::open(cfg).await.expect("open temp db")
     }
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     #[tokio::test]
     async fn insert_unique_then_duplicate_with_tags() {
         let db = temp_db().await;
@@ -734,7 +815,7 @@ mod tests {
         assert!(second.is_duplicate());
         assert_eq!(first.uuid(), second.uuid());
 
-        let got = repo.get_by_uuid(&db, first.uuid()).await.unwrap();
+        let got = repo.get_by_uuid(&db, NS, first.uuid()).await.unwrap();
         assert_eq!(got.tags.len(), 2);
         assert_eq!(got.importance, 0.8);
     }
@@ -743,7 +824,7 @@ mod tests {
     async fn missing_uuid_returns_not_found() {
         let db = temp_db().await;
         let repo = SqliteMemoryRepository::new();
-        let err = repo.get_by_uuid(&db, Uuid::new_v4()).await.expect_err("NotFound");
+        let err = repo.get_by_uuid(&db, NS, Uuid::new_v4()).await.expect_err("NotFound");
         assert_eq!(err.code(), crate::error::ErrorCode::NotFound);
     }
 
@@ -763,12 +844,12 @@ mod tests {
             .unwrap()
             .uuid();
 
-        repo.update_status(&db, uuid, MemoryStatus::Archived).await.unwrap();
-        repo.update_metadata(&db, uuid, &serde_json::json!({"k":"v"})).await.unwrap();
-        repo.update_importance(&db, uuid, 0.99).await.unwrap();
-        repo.mark_accessed(&db, uuid).await.unwrap();
+        repo.update_status(&db, NS, uuid, MemoryStatus::Archived).await.unwrap();
+        repo.update_metadata(&db, NS, uuid, &serde_json::json!({"k":"v"})).await.unwrap();
+        repo.update_importance(&db, NS, uuid, 0.99).await.unwrap();
+        repo.mark_accessed(&db, NS, uuid).await.unwrap();
 
-        let got = repo.get_by_uuid(&db, uuid).await.unwrap();
+        let got = repo.get_by_uuid(&db, NS, uuid).await.unwrap();
         assert_eq!(got.status, MemoryStatus::Archived);
         assert_eq!(got.metadata, serde_json::json!({"k":"v"}));
         assert_eq!(got.importance, 0.99);
@@ -791,8 +872,8 @@ mod tests {
             .await
             .unwrap()
             .uuid();
-        repo.delete(&db, uuid).await.unwrap();
-        let err = repo.get_by_uuid(&db, uuid).await.expect_err("gone");
+        repo.delete(&db, NS, uuid).await.unwrap();
+        let err = repo.get_by_uuid(&db, NS, uuid).await.expect_err("gone");
         assert_eq!(err.code(), crate::error::ErrorCode::NotFound);
     }
 
@@ -881,7 +962,7 @@ mod tests {
             .unwrap()
             .uuid();
         assert_eq!(
-            repo.update_importance(&db, uuid, -0.1).await.unwrap_err().code(),
+            repo.update_importance(&db, NS, uuid, -0.1).await.unwrap_err().code(),
             crate::error::ErrorCode::Validation
         );
     }

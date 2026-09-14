@@ -53,6 +53,7 @@ impl EmbeddedNova {
 
     pub async fn remember(&self, req: http_client::RememberRequest) -> NovaResult<RememberOutput> {
         let input = ops_remember::RememberInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: &req.content,
             source: req.source,
             importance: req.importance,
@@ -97,6 +98,7 @@ impl EmbeddedNova {
     pub async fn delete_memory(&self, uuid: Uuid) -> NovaResult<ForgetOutput> {
         self.memory
             .forget(ops_forget::ForgetInput {
+                namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                 target: ops_forget::ForgetTarget::One(uuid),
                 mode: ops_forget::ForgetMode::Hard,
                 gc_graph: false,
@@ -111,6 +113,7 @@ impl EmbeddedNova {
         req: http_client::UpdateMemoryRequest,
     ) -> NovaResult<MemoryRecord> {
         let input = UpdateInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: req.content,
             importance: req.importance,
             metadata: req.metadata,
@@ -125,6 +128,7 @@ impl EmbeddedNova {
         req: http_client::MergeMemoriesRequest,
     ) -> NovaResult<http_client::MergeMemoriesResponse> {
         let input = yq_nova_core::memory::ops_merge::MergeInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             uuids: req.uuids,
             keep_uuid: req.keep_uuid,
         };
@@ -172,6 +176,7 @@ impl EmbeddedNova {
             .collect();
         let on_conflict = ConflictStrategy::Skip;
         let input = ImportInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: req.embed,
             on_conflict,
@@ -202,6 +207,7 @@ impl EmbeddedNova {
 
     pub async fn list_tags(&self, limit: u32, offset: u32) -> NovaResult<TagListOutput> {
         let input = TagListInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             limit,
             offset,
         };
@@ -210,6 +216,7 @@ impl EmbeddedNova {
 
     pub async fn rename_tag(&self, name: &str, new_name: &str) -> NovaResult<TagRenameOutput> {
         let input = TagRenameInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             name: name.to_string(),
             new_name: new_name.to_string(),
         };
@@ -218,6 +225,7 @@ impl EmbeddedNova {
 
     pub async fn delete_tag(&self, name: &str) -> NovaResult<TagDeleteOutput> {
         let input = TagDeleteInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             name: name.to_string(),
         };
         self.memory.delete_tag(input).await
@@ -233,6 +241,7 @@ impl EmbeddedNova {
             .upsert(
                 &self.graph.database,
                 yq_nova_core::storage::entity::UpsertEntityInput {
+                    namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                     name: &req.name,
                     r#type: &req.entity_type,
                     description: req.description.as_deref(),
@@ -241,7 +250,15 @@ impl EmbeddedNova {
             )
             .await?;
         let uuid = outcome.uuid();
-        let entity = self.graph.entity_repo.get_by_uuid(&self.graph.database, uuid).await?;
+        let entity = self
+            .graph
+            .entity_repo
+            .get_by_uuid(
+                &self.graph.database,
+                yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
+                uuid,
+            )
+            .await?;
         Ok(http_client::UpsertEntityResponse {
             outcome,
             entity,
@@ -258,14 +275,22 @@ impl EmbeddedNova {
             predicate_whitelist: req.predicate_whitelist,
             min_confidence: req.min_confidence,
         };
-        self.graph.traverse_graph(req.start, opts).await
+        self.graph
+            .traverse_graph(yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID, req.start, opts)
+            .await
     }
 
     pub async fn extract_and_link(
         &self,
         req: http_client::ExtractAndLinkRequest,
     ) -> NovaResult<LinkResult> {
-        self.graph.extract_and_link(&req.text, &req.opts).await
+        self.graph
+            .extract_and_link(
+                yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
+                &req.text,
+                &req.opts,
+            )
+            .await
     }
 
     pub async fn merge_entities(
@@ -276,7 +301,10 @@ impl EmbeddedNova {
             keep_uuid: req.keep_uuid,
             discard_uuids: req.discard_uuids,
         };
-        let out = self.graph.merge_entities(input).await?;
+        let out = self
+            .graph
+            .merge_entities(yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID, input)
+            .await?;
         Ok(http_client::MergeEntitiesResponse {
             kept_uuid: out.kept_uuid,
             merged: out.merged,

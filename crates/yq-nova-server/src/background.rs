@@ -67,6 +67,7 @@ pub async fn collect_garbage_once(
         ForgetMode::Archive
     };
     let input = ForgetInput {
+        namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
         target: ops_forget::ForgetTarget::Filter(filter),
         mode,
         gc_graph: false,
@@ -248,7 +249,10 @@ mod tests {
         assert_eq!(again, 0);
 
         for (i, u) in uuids.iter().enumerate() {
-            let rec = repo.get_by_uuid(&db, *u).await.expect("get");
+            let rec = repo
+                .get_by_uuid(&db, yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID, *u)
+                .await
+                .expect("get");
             let want = if i < 2 { MemoryStatus::Expired } else { MemoryStatus::Active };
             assert_eq!(rec.status, want, "i={i}");
         }

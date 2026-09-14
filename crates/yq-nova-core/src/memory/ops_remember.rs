@@ -23,6 +23,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct RememberInput<'a> {
+    pub namespace_id: i64,
     pub content: &'a str,
     pub source: MemorySource,
     pub importance: f32,
@@ -38,6 +39,7 @@ pub struct RememberInput<'a> {
 impl<'a> Default for RememberInput<'a> {
     fn default() -> Self {
         Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: "",
             source: MemorySource::Agent,
             importance: 0.5,
@@ -66,6 +68,7 @@ pub struct RememberOutput {
 }
 
 pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResult<RememberOutput> {
+    let ns = input.namespace_id;
     let content = input.content.trim();
     if content.is_empty() {
         return Err(NovaError::validation("remember: content must not be empty"));
@@ -96,6 +99,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                     let chunk_meta = build_chunk_metadata(input.metadata, group_uuid, i, total);
                     let out = remember_one(
                         svc,
+                        ns,
                         ct,
                         input.tags,
                         Some(&chunk_meta),
@@ -139,6 +143,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
 
     remember_one(
         svc,
+        ns,
         content,
         input.tags,
         input.metadata,
@@ -155,6 +160,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
 #[allow(clippy::too_many_arguments)]
 async fn remember_one(
     svc: &MemoryService,
+    namespace_id: i64,
     content: &str,
     tags: &[String],
     metadata: Option<&serde_json::Value>,
@@ -167,10 +173,11 @@ async fn remember_one(
 ) -> NovaResult<RememberOutput> {
     if let Some(opts) = dedup {
         if opts.enabled {
-            let decision = super::quality::dedup::decide(svc, content, &opts).await?;
+            let decision = super::quality::dedup::decide(svc, namespace_id, content, &opts).await?;
             if let Some(existing_uuid) = decision.blocked_by {
-                let existing = svc.memory_repo.get_by_uuid(&svc.database, existing_uuid).await?;
-                let hits = super::quality::dedup::detect(svc, content, &opts).await?;
+                let existing =
+                    svc.memory_repo.get_by_uuid(&svc.database, namespace_id, existing_uuid).await?;
+                let hits = super::quality::dedup::detect(svc, namespace_id, content, &opts).await?;
                 return Ok(RememberOutput {
                     uuid: existing_uuid,
                     duplicate: true,
@@ -195,6 +202,7 @@ async fn remember_one(
     let merged = merge_tags(tags, &extraction.tags);
 
     let insert_in = crate::storage::memory::InsertMemoryInput {
+        namespace_id,
         content,
         source,
         importance,
@@ -218,7 +226,9 @@ async fn remember_one(
                 meta.provider
             )));
         }
-        svc.vector_store.insert_vector(uuid, &meta.provider, &meta.model, &vec).await?;
+        svc.vector_store
+            .insert_vector(namespace_id, uuid, &meta.provider, &meta.model, &vec)
+            .await?;
         embedding_stored = true;
     }
 
@@ -228,7 +238,7 @@ async fn remember_one(
         let mut entity_names: std::collections::HashMap<(String, String), Uuid> =
             std::collections::HashMap::new();
         for ent in &extraction.entities {
-            let r = upsert_one_entity(&svc.entity_repo, svc, ent).await;
+            let r = upsert_one_entity(namespace_id, &svc.entity_repo, svc, ent).await;
             match r {
                 Ok(ent_uuid) => {
                     entity_names.insert((ent.name.clone(), ent.entity_type.clone()), ent_uuid);
@@ -242,7 +252,9 @@ async fn remember_one(
 
         if !extraction.relations.is_empty() && entity_names.len() >= 2 {
             for rel in dedupe_relations(&extraction.relations) {
-                let r = insert_one_relation(&svc.relation_repo, svc, &entity_names, &rel).await;
+                let r =
+                    insert_one_relation(namespace_id, &svc.relation_repo, svc, &entity_names, &rel)
+                        .await;
                 match r {
                     Ok(true) => relations_extracted += 1,
                     Ok(false) => {},
@@ -299,6 +311,7 @@ fn merge_tags(caller: &[String], extractor: &[String]) -> Vec<String> {
 }
 
 async fn upsert_one_entity(
+    namespace_id: i64,
     repo: &SqliteEntityRepository,
     svc: &MemoryService,
     ent: &crate::graph::extractor::EntityCandidate,
@@ -316,6 +329,7 @@ async fn upsert_one_entity(
         .upsert(
             &svc.database,
             UpsertEntityInput {
+                namespace_id,
                 name: &name,
                 r#type: &etype,
                 description: ent.description.as_deref(),
@@ -327,6 +341,7 @@ async fn upsert_one_entity(
 }
 
 async fn insert_one_relation(
+    namespace_id: i64,
     repo: &SqliteRelationRepository,
     svc: &MemoryService,
     entity_uuids: &std::collections::HashMap<(String, String), Uuid>,
@@ -357,6 +372,7 @@ async fn insert_one_relation(
         .insert(
             &svc.database,
             InsertRelationInput {
+                namespace_id,
                 source_uuid: src,
                 target_uuid: tgt,
                 predicate: &pred,
@@ -537,7 +553,11 @@ mod tests {
         let combined = svc.get_memory(a.uuid).await.unwrap();
         assert_eq!(combined.content, "shared content alpha project\nshared content alpha project");
         let q = svc.embedding.embed_one(&combined.content).await.unwrap();
-        let hits = svc.vector_store.knn_search(&q, 5, 0.99).await.unwrap();
+        let hits = svc
+            .vector_store
+            .knn_search(crate::storage::namespace::DEFAULT_NAMESPACE_ID, &q, 5, 0.99)
+            .await
+            .unwrap();
         assert!(hits.iter().any(|h| h.memory_uuid == a.uuid), "merged memory re-embedded");
     }
 
@@ -691,7 +711,10 @@ mod tests {
             );
         }
 
-        let original = svc.memory_repo.get_by_uuid(&svc.database, out.uuid).await;
+        let original = svc
+            .memory_repo
+            .get_by_uuid(&svc.database, crate::storage::namespace::DEFAULT_NAMESPACE_ID, out.uuid)
+            .await;
         assert!(original.is_err(), "original group uuid should not be a stored memory");
     }
 

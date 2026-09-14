@@ -15,6 +15,8 @@ pub struct EntityRecord {
 
     pub uuid: Uuid,
 
+    pub namespace_id: i64,
+
     pub name: String,
 
     pub r#type: String,
@@ -30,6 +32,8 @@ pub struct EntityRecord {
 
 #[derive(Debug, Clone)]
 pub struct UpsertEntityInput<'a> {
+    pub namespace_id: i64,
+
     pub name: &'a str,
 
     pub r#type: &'a str,
@@ -63,22 +67,34 @@ pub trait EntityRepository: Repository<EntityRecord> {
         input: UpsertEntityInput<'_>,
     ) -> NovaResult<UpsertOutcome>;
 
-    async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<EntityRecord>;
+    async fn get_by_uuid(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        uuid: Uuid,
+    ) -> NovaResult<EntityRecord>;
 
     async fn get_by_name_type(
         &self,
         db: &Database,
+        namespace_id: i64,
         name: &str,
         r#type: &str,
     ) -> NovaResult<Option<EntityRecord>>;
 
-    async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()>;
+    async fn delete(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()>;
 
-    async fn find_by_name(&self, db: &Database, name: &str) -> NovaResult<Vec<EntityRecord>>;
+    async fn find_by_name(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+    ) -> NovaResult<Vec<EntityRecord>>;
 
     async fn list(
         &self,
         db: &Database,
+        namespace_id: i64,
         name_prefix: Option<&str>,
         type_filter: Option<&str>,
         limit: usize,
@@ -130,10 +146,11 @@ impl EntityRepository for SqliteEntityRepository {
 
         let existing: Option<(i64, String, Option<String>, String)> = sqlx::query_as(
             "SELECT id, uuid, description, metadata_json FROM entities WHERE name = ?1 AND type = \
-             ?2",
+             ?2 AND namespace_id = ?3",
         )
         .bind(name)
         .bind(r#type)
+        .bind(input.namespace_id)
         .fetch_optional(pool)
         .await
         .map_err(NovaError::storage)?;
@@ -150,12 +167,13 @@ impl EntityRepository for SqliteEntityRepository {
             };
             sqlx::query(
                 "UPDATE entities SET description = ?1, metadata_json = ?2, updated_at = ?3 WHERE \
-                 uuid = ?4",
+                 uuid = ?4 AND namespace_id = ?5",
             )
             .bind(new_desc)
             .bind(new_meta.to_string())
             .bind(now)
             .bind(existing_uuid.to_string())
+            .bind(input.namespace_id)
             .execute(pool)
             .await
             .map_err(NovaError::storage)?;
@@ -164,10 +182,11 @@ impl EntityRepository for SqliteEntityRepository {
 
         let uuid = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO entities (uuid, name, type, description, metadata_json, created_at, \
-             updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO entities (uuid, namespace_id, name, type, description, metadata_json, \
+             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(uuid.to_string())
+        .bind(input.namespace_id)
         .bind(name)
         .bind(r#type)
         .bind(input.description)
@@ -180,12 +199,18 @@ impl EntityRepository for SqliteEntityRepository {
         Ok(UpsertOutcome::Created(uuid))
     }
 
-    async fn get_by_uuid(&self, db: &Database, uuid: Uuid) -> NovaResult<EntityRecord> {
+    async fn get_by_uuid(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        uuid: Uuid,
+    ) -> NovaResult<EntityRecord> {
         let row = sqlx::query(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
-             entities WHERE uuid = ?1",
+            "SELECT id, uuid, namespace_id, name, type, description, metadata_json, created_at, \
+             updated_at FROM entities WHERE uuid = ?1 AND namespace_id = ?2",
         )
         .bind(uuid.to_string())
+        .bind(namespace_id)
         .fetch_optional(&db.pool)
         .await
         .map_err(NovaError::storage)?;
@@ -196,15 +221,17 @@ impl EntityRepository for SqliteEntityRepository {
     async fn get_by_name_type(
         &self,
         db: &Database,
+        namespace_id: i64,
         name: &str,
         r#type: &str,
     ) -> NovaResult<Option<EntityRecord>> {
         let row = sqlx::query(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
-             entities WHERE name = ?1 AND type = ?2",
+            "SELECT id, uuid, namespace_id, name, type, description, metadata_json, created_at, \
+             updated_at FROM entities WHERE name = ?1 AND type = ?2 AND namespace_id = ?3",
         )
         .bind(name)
         .bind(r#type)
+        .bind(namespace_id)
         .fetch_optional(&db.pool)
         .await
         .map_err(NovaError::storage)?;
@@ -214,9 +241,10 @@ impl EntityRepository for SqliteEntityRepository {
         }
     }
 
-    async fn delete(&self, db: &Database, uuid: Uuid) -> NovaResult<()> {
-        let res = sqlx::query("DELETE FROM entities WHERE uuid = ?1")
+    async fn delete(&self, db: &Database, namespace_id: i64, uuid: Uuid) -> NovaResult<()> {
+        let res = sqlx::query("DELETE FROM entities WHERE uuid = ?1 AND namespace_id = ?2")
             .bind(uuid.to_string())
+            .bind(namespace_id)
             .execute(&db.pool)
             .await
             .map_err(NovaError::storage)?;
@@ -226,11 +254,21 @@ impl EntityRepository for SqliteEntityRepository {
         Ok(())
     }
 
-    async fn find_by_name(&self, db: &Database, name: &str) -> NovaResult<Vec<EntityRecord>> {
-        let sql = "SELECT id, uuid, name, type, description, metadata_json, created_at, \
-                   updated_at FROM entities WHERE LOWER(name) = LOWER(?1) ORDER BY updated_at DESC";
-        let rows =
-            sqlx::query(sql).bind(name).fetch_all(&db.pool).await.map_err(NovaError::storage)?;
+    async fn find_by_name(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+    ) -> NovaResult<Vec<EntityRecord>> {
+        let sql = "SELECT id, uuid, namespace_id, name, type, description, metadata_json, \
+                   created_at, updated_at FROM entities WHERE LOWER(name) = LOWER(?1) AND \
+                   namespace_id = ?2 ORDER BY updated_at DESC";
+        let rows = sqlx::query(sql)
+            .bind(name)
+            .bind(namespace_id)
+            .fetch_all(&db.pool)
+            .await
+            .map_err(NovaError::storage)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(row_to_entity(&row)?);
@@ -241,12 +279,14 @@ impl EntityRepository for SqliteEntityRepository {
     async fn list(
         &self,
         db: &Database,
+        namespace_id: i64,
         name_prefix: Option<&str>,
         type_filter: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> NovaResult<Vec<EntityRecord>> {
         let mut where_clauses: Vec<&str> = Vec::new();
+        where_clauses.push("namespace_id = ?");
         if name_prefix.is_some() {
             where_clauses.push("name LIKE ?");
         }
@@ -261,10 +301,10 @@ impl EntityRepository for SqliteEntityRepository {
         let limit = limit.min(10_000) as i64;
         let offset = offset as i64;
         let sql = format!(
-            "SELECT id, uuid, name, type, description, metadata_json, created_at, updated_at FROM \
-             entities {wc} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            "SELECT id, uuid, namespace_id, name, type, description, metadata_json, created_at, \
+             updated_at FROM entities {wc} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(&sql).bind(namespace_id);
         if let Some(np) = name_prefix {
             q = q.bind(format!("{}%", np.replace('%', "\\%")));
         }
@@ -286,6 +326,7 @@ fn row_to_entity(row: &sqlx::sqlite::SqliteRow) -> NovaResult<EntityRecord> {
     let uuid_s: String = row.try_get("uuid").map_err(NovaError::storage)?;
     let uuid =
         Uuid::parse_str(&uuid_s).map_err(|e| NovaError::storage_msg(format!("bad uuid: {e}")))?;
+    let namespace_id: i64 = row.try_get("namespace_id").map_err(NovaError::storage)?;
     let name: String = row.try_get("name").map_err(NovaError::storage)?;
     let r#type: String = row.try_get("type").map_err(NovaError::storage)?;
     let description: Option<String> = row.try_get("description").map_err(NovaError::storage)?;
@@ -297,6 +338,7 @@ fn row_to_entity(row: &sqlx::sqlite::SqliteRow) -> NovaResult<EntityRecord> {
     Ok(EntityRecord {
         id,
         uuid,
+        namespace_id,
         name,
         r#type,
         description,
@@ -333,6 +375,8 @@ mod tests {
     use super::*;
     use crate::config::StorageConfig;
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     async fn temp_db() -> Database {
         let dir = std::env::temp_dir().join(format!("yq-nova-m2-ent-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -353,6 +397,7 @@ mod tests {
             .upsert(
                 &db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "Alice",
                     r#type: "person",
                     description: Some("desc 1"),
@@ -368,6 +413,7 @@ mod tests {
             .upsert(
                 &db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "Alice",
                     r#type: "person",
                     description: None,
@@ -379,7 +425,7 @@ mod tests {
         assert!(matches!(second, UpsertOutcome::Updated(_)));
         assert_eq!(second.uuid(), uuid);
 
-        let got = repo.get_by_uuid(&db, uuid).await.unwrap();
+        let got = repo.get_by_uuid(&db, NS, uuid).await.unwrap();
         assert_eq!(got.description.as_deref(), Some("desc 1"));
         assert_eq!(got.metadata, serde_json::json!({"role":"ceo"}));
     }
@@ -392,6 +438,7 @@ mod tests {
             .upsert(
                 &db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "  ",
                     r#type: "x",
                     description: None,
@@ -401,10 +448,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
-        let err2 = repo
+        let err = repo
             .upsert(
                 &db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: "x",
                     r#type: "",
                     description: None,
@@ -413,25 +461,26 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(err2.code(), crate::error::ErrorCode::Validation);
+        assert_eq!(err.code(), crate::error::ErrorCode::Validation);
     }
 
     #[tokio::test]
-    async fn delete_returns_not_found_for_missing() {
+    async fn get_by_uuid_returns_not_found_for_missing() {
         let db = temp_db().await;
         let repo = SqliteEntityRepository::new();
-        let err = repo.delete(&db, Uuid::new_v4()).await.unwrap_err();
+        let err = repo.get_by_uuid(&db, NS, Uuid::new_v4()).await.unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::NotFound);
     }
 
     #[tokio::test]
-    async fn list_supports_name_prefix_and_type_filter() {
+    async fn list_filters_by_name_prefix() {
         let db = temp_db().await;
         let repo = SqliteEntityRepository::new();
-        for (n, t) in [("Alice", "person"), ("Alex", "person"), ("Bob", "org")] {
+        for (n, t) in [("Alice", "person"), ("Bob", "person"), ("Acme", "org")] {
             repo.upsert(
                 &db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: n,
                     r#type: t,
                     description: None,
@@ -441,12 +490,56 @@ mod tests {
             .await
             .unwrap();
         }
-        let all = repo.list(&db, None, None, 100, 0).await.unwrap();
-        assert_eq!(all.len(), 3);
-        let al = repo.list(&db, Some("Al"), None, 100, 0).await.unwrap();
-        assert_eq!(al.len(), 2);
-        let org = repo.list(&db, None, Some("org"), 100, 0).await.unwrap();
-        assert_eq!(org.len(), 1);
-        assert_eq!(org[0].name, "Bob");
+        let list = repo.list(&db, NS, Some("Al"), None, 100, 0).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn namespaces_are_isolated() {
+        let db = temp_db().await;
+        let repo = SqliteEntityRepository::new();
+        let ns2 = 999i64;
+        sqlx::query(
+            "INSERT OR IGNORE INTO namespaces (id, uuid, name, description, config_json, \
+             created_at, updated_at) VALUES (?1, ?2, ?3, NULL, '{}', 1, 1)",
+        )
+        .bind(ns2)
+        .bind("00000000-0000-0000-0000-000000000999")
+        .bind("ns-999")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        repo.upsert(
+            &db,
+            UpsertEntityInput {
+                namespace_id: NS,
+                name: "Shared",
+                r#type: "person",
+                description: None,
+                metadata: None,
+            },
+        )
+        .await
+        .unwrap();
+        let created = repo
+            .upsert(
+                &db,
+                UpsertEntityInput {
+                    namespace_id: ns2,
+                    name: "Shared",
+                    r#type: "person",
+                    description: Some("other"),
+                    metadata: Some(&serde_json::json!({"ns":2})),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(created, UpsertOutcome::Created(_)));
+        let a = repo.get_by_name_type(&db, NS, "Shared", "person").await.unwrap().unwrap();
+        let b = repo.get_by_name_type(&db, ns2, "Shared", "person").await.unwrap().unwrap();
+        assert_ne!(a.uuid, b.uuid);
+        assert_eq!(a.description.as_deref(), None);
+        assert_eq!(b.description.as_deref(), Some("other"));
     }
 }

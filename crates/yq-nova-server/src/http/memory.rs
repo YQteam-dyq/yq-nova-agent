@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use yq_nova_core::{
     storage::{MemoryFilter, MemorySource},
 };
 
-use crate::http::{AppError, AppState, Result};
+use crate::http::{AppError, AppState, Result, auth::NamespaceContext};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -92,10 +92,12 @@ impl Default for RecallRequest {
 
 pub async fn remember(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<RememberRequest>,
 ) -> Result<Json<RememberOutput>> {
     let svc: &MemoryService = &state.memory;
     let input = RememberInput {
+        namespace_id: ns.id,
         content: &req.content,
         source: req.source,
         importance: req.importance,
@@ -113,18 +115,26 @@ pub async fn remember(
 
 pub async fn remember_batch(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<BatchRememberInput>,
 ) -> Result<Json<BatchRememberOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    req.namespace_id = ns.id;
     let out = svc.remember_batch(req).await?;
     Ok(Json(out))
 }
 
 pub async fn recall(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<RecallRequest>,
 ) -> Result<Json<RecallOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut filter = req.filter.clone();
+    if filter.namespace_id.is_none() {
+        filter.namespace_id = Some(ns.id);
+    }
     let input = RecallInput {
         query: &req.query,
         top_k: req.top_k,
@@ -135,7 +145,7 @@ pub async fn recall(
         hybrid_weights: req.hybrid_weights,
         rrf_k: req.rrf_k,
         rank_weights: req.rank_weights,
-        filter: req.filter.clone(),
+        filter,
         group_chunks: req.group_chunks,
         entity_focus: req.entity_focus,
         rebalance_importance: false,
@@ -146,39 +156,50 @@ pub async fn recall(
 
 pub async fn list_memories(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ListInput>,
 ) -> Result<Json<ListOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    if req.filter.namespace_id.is_none() {
+        req.filter.namespace_id = Some(ns.id);
+    }
     let out = svc.list_memories(req).await?;
     Ok(Json(out))
 }
 
 pub async fn forget(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ForgetInput>,
 ) -> Result<Json<yq_nova_core::memory::ops_forget::ForgetOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    req.namespace_id = ns.id;
     let out = svc.forget(req).await?;
     Ok(Json(out))
 }
 
 pub async fn get_memory(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Path(uuid): Path<Uuid>,
 ) -> Result<Json<yq_nova_core::storage::MemoryRecord>> {
     let svc: &MemoryService = &state.memory;
-    let mem = svc.get_memory(uuid).await.map_err(AppError::from)?;
+    let mem = svc.get_memory_in(ns.id, uuid).await.map_err(AppError::from)?;
     Ok(Json(mem))
 }
 
 pub async fn delete_memory(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Path(uuid): Path<Uuid>,
 ) -> Result<Json<yq_nova_core::memory::ops_forget::ForgetOutput>> {
     use yq_nova_core::memory::ops_forget::{ForgetInput, ForgetMode, ForgetTarget};
 
     let svc: &MemoryService = &state.memory;
     let input = ForgetInput {
+        namespace_id: ns.id,
         target: ForgetTarget::One(uuid),
         mode: ForgetMode::Hard,
         gc_graph: false,
@@ -200,11 +221,13 @@ pub struct UpdateMemoryRequest {
 
 pub async fn update_memory(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Path(uuid): Path<Uuid>,
     Json(req): Json<UpdateMemoryRequest>,
 ) -> Result<Json<yq_nova_core::storage::MemoryRecord>> {
     let svc: &MemoryService = &state.memory;
     let input = UpdateInput {
+        namespace_id: ns.id,
         content: req.content,
         importance: req.importance,
         metadata: req.metadata,
@@ -223,10 +246,12 @@ pub struct MergeRequest {
 
 pub async fn merge_memories(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<MergeRequest>,
 ) -> Result<Json<MergeOutput>> {
     let svc: &MemoryService = &state.memory;
     let input = MergeInput {
+        namespace_id: ns.id,
         uuids: req.uuids,
         keep_uuid: req.keep_uuid,
     };
@@ -236,18 +261,26 @@ pub async fn merge_memories(
 
 pub async fn export_memories(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ExportInput>,
 ) -> Result<Json<yq_nova_core::memory::ops_export::ExportOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    let mut filter = req.filter.take().unwrap_or_else(yq_nova_core::storage::MemoryFilter::default);
+    filter.namespace_id = Some(ns.id);
+    req.filter = Some(filter);
     let out = svc.export(req).await?;
     Ok(Json(out))
 }
 
 pub async fn import_memories(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ImportInput>,
 ) -> Result<Json<yq_nova_core::memory::ops_import::ImportOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    req.namespace_id = ns.id;
     let out = svc.import(req).await?;
     Ok(Json(out))
 }

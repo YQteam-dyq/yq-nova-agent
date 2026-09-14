@@ -8,9 +8,21 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MergeInput {
+    pub namespace_id: i64,
     pub uuids: Vec<Uuid>,
     pub keep_uuid: Option<Uuid>,
+}
+
+impl Default for MergeInput {
+    fn default() -> Self {
+        Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
+            uuids: Vec::new(),
+            keep_uuid: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +33,7 @@ pub struct MergeOutput {
 }
 
 pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResult<MergeOutput> {
+    let ns = input.namespace_id;
     let uuids = input.uuids;
     let keep_uuid = input.keep_uuid;
 
@@ -44,7 +57,7 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
 
     for u in &uuids {
         svc.memory_repo
-            .get_by_uuid(&svc.database, *u)
+            .get_by_uuid(&svc.database, ns, *u)
             .await
             .map_err(|_| NovaError::validation(format!("merge: uuid {u} does not exist")))?;
     }
@@ -52,7 +65,7 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
     let records = {
         let mut records = Vec::with_capacity(uuids.len());
         for u in &uuids {
-            let rec = svc.memory_repo.get_by_uuid(&svc.database, *u).await?;
+            let rec = svc.memory_repo.get_by_uuid(&svc.database, ns, *u).await?;
             records.push(rec);
         }
         records
@@ -80,19 +93,19 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
         merged_strs.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
     );
 
-    let keep_meta = svc.memory_repo.get_by_uuid(&svc.database, kept_uuid).await?.metadata;
+    let keep_meta = svc.memory_repo.get_by_uuid(&svc.database, ns, kept_uuid).await?.metadata;
     let mut keep_meta_obj = match keep_meta {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
     };
     keep_meta_obj.insert("merged_from".to_string(), merged_from_val);
     svc.memory_repo
-        .update_metadata(&svc.database, kept_uuid, &serde_json::Value::Object(keep_meta_obj))
+        .update_metadata(&svc.database, ns, kept_uuid, &serde_json::Value::Object(keep_meta_obj))
         .await?;
 
     for u in &merged {
-        let rec = svc.memory_repo.get_by_uuid(&svc.database, *u).await?;
-        svc.memory_repo.update_status(&svc.database, *u, MemoryStatus::Archived).await?;
+        let rec = svc.memory_repo.get_by_uuid(&svc.database, ns, *u).await?;
+        svc.memory_repo.update_status(&svc.database, ns, *u, MemoryStatus::Archived).await?;
 
         let mut meta_obj = match rec.metadata {
             serde_json::Value::Object(m) => m,
@@ -101,7 +114,7 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
         meta_obj
             .insert("merged_into".to_string(), serde_json::Value::String(kept_uuid.to_string()));
         svc.memory_repo
-            .update_metadata(&svc.database, *u, &serde_json::Value::Object(meta_obj))
+            .update_metadata(&svc.database, ns, *u, &serde_json::Value::Object(meta_obj))
             .await?;
     }
 
@@ -109,8 +122,9 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
     let placeholders: Vec<String> =
         (0..merged_uuids_strs.len()).map(|i| format!("?{}", i + 2)).collect();
     let sql = format!(
-        "UPDATE relations SET memory_uuid = ?1 WHERE memory_uuid IN ({})",
+        "UPDATE relations SET memory_uuid = ?1 WHERE memory_uuid IN ({}) AND namespace_id = ?{}",
         placeholders.join(","),
+        merged_uuids_strs.len() + 2,
     );
 
     let keep_uuid_str = kept_uuid.to_string();
@@ -118,6 +132,7 @@ pub async fn merge_memories(svc: &MemoryService, input: MergeInput) -> NovaResul
     for u_str in &merged_uuids_strs {
         q = q.bind(u_str);
     }
+    q = q.bind(ns);
     let result = q.execute(&svc.database.pool).await.map_err(NovaError::storage)?;
     let remapped_relations = result.rows_affected() as usize;
 
@@ -137,6 +152,8 @@ mod tests {
         memory::ops_remember::{RememberInput, service_for_tests},
         storage::{Database, MemoryStatus, entity::EntityRepository, relation::RelationRepository},
     };
+
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
 
     async fn temp_svc() -> crate::memory::MemoryService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-merge-{}", Uuid::new_v4()));
@@ -191,6 +208,7 @@ mod tests {
 
         let out = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: None,
             })
@@ -224,6 +242,7 @@ mod tests {
 
         let out = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(b.uuid),
             })
@@ -254,6 +273,7 @@ mod tests {
 
         let _out = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(a.uuid),
             })
@@ -294,6 +314,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 crate::storage::entity::UpsertEntityInput {
+                    namespace_id: NS,
                     name: "EntityA",
                     r#type: "test",
                     description: None,
@@ -307,6 +328,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 crate::storage::entity::UpsertEntityInput {
+                    namespace_id: NS,
                     name: "EntityB",
                     r#type: "test",
                     description: None,
@@ -322,6 +344,7 @@ mod tests {
             .insert(
                 &svc.database,
                 crate::storage::relation::InsertRelationInput {
+                    namespace_id: NS,
                     source_uuid: ent_a,
                     target_uuid: ent_b,
                     predicate: "mentions",
@@ -337,6 +360,7 @@ mod tests {
             .insert(
                 &svc.database,
                 crate::storage::relation::InsertRelationInput {
+                    namespace_id: NS,
                     source_uuid: ent_b,
                     target_uuid: ent_a,
                     predicate: "mentions",
@@ -352,6 +376,7 @@ mod tests {
             .insert(
                 &svc.database,
                 crate::storage::relation::InsertRelationInput {
+                    namespace_id: NS,
                     source_uuid: ent_a,
                     target_uuid: ent_b,
                     predicate: "knows",
@@ -366,6 +391,7 @@ mod tests {
 
         let out = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(a.uuid),
             })
@@ -399,6 +425,7 @@ mod tests {
         let svc = temp_svc().await;
         let err = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![Uuid::new_v4()],
                 keep_uuid: None,
             })
@@ -413,6 +440,7 @@ mod tests {
         let uuids: Vec<Uuid> = (0..51).map(|_| Uuid::new_v4()).collect();
         let err = svc
             .merge(MergeInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 uuids,
                 keep_uuid: None,
             })
@@ -427,6 +455,7 @@ mod tests {
         let uuid = Uuid::new_v4();
         let err = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![uuid, uuid],
                 keep_uuid: None,
             })
@@ -447,6 +476,7 @@ mod tests {
             .unwrap();
         let err = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, Uuid::new_v4()],
                 keep_uuid: None,
             })
@@ -474,6 +504,7 @@ mod tests {
             .unwrap();
         let err = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(Uuid::new_v4()),
             })
@@ -502,6 +533,7 @@ mod tests {
 
         let out1 = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(a.uuid),
             })
@@ -511,6 +543,7 @@ mod tests {
 
         let out2 = svc
             .merge(MergeInput {
+                namespace_id: NS,
                 uuids: vec![a.uuid, b.uuid],
                 keep_uuid: Some(a.uuid),
             })

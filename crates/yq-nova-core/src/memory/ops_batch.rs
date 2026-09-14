@@ -43,6 +43,7 @@ impl Default for BatchRememberItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BatchRememberInput {
+    pub namespace_id: i64,
     pub items: Vec<BatchRememberItem>,
     pub continue_on_error: bool,
 }
@@ -50,6 +51,7 @@ pub struct BatchRememberInput {
 impl Default for BatchRememberInput {
     fn default() -> Self {
         Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items: Vec::new(),
             continue_on_error: true,
         }
@@ -98,6 +100,7 @@ pub async fn remember_batch(
     for (index, item) in input.items.iter().enumerate() {
         let outcome = svc
             .remember(RememberInput {
+                namespace_id: input.namespace_id,
                 content: &item.content,
                 source: item.source,
                 importance: item.importance,
@@ -200,6 +203,7 @@ mod tests {
         let out = remember_batch(
             &svc,
             BatchRememberInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 items: vec![
                     item("batch entry one", 0.4, "batch"),
                     item("batch entry two", 0.7, "batch"),
@@ -234,6 +238,7 @@ mod tests {
         let out = remember_batch(
             &svc,
             BatchRememberInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 items: vec![item("same content", 0.5, "dup"), item("same content", 0.5, "dup")],
                 continue_on_error: true,
             },
@@ -261,6 +266,7 @@ mod tests {
         let strict = remember_batch(
             &svc,
             BatchRememberInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 items: items.clone(),
                 continue_on_error: false,
             },
@@ -285,6 +291,7 @@ mod tests {
         let lenient = remember_batch(
             &svc,
             BatchRememberInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 items,
                 continue_on_error: true,
             },
@@ -303,6 +310,7 @@ mod tests {
         assert_eq!(empty.code(), crate::error::ErrorCode::Validation);
 
         let oversized = BatchRememberInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items: (0..=MAX_BATCH_ITEMS).map(|_| BatchRememberItem::default()).collect(),
             continue_on_error: true,
         };

@@ -291,6 +291,7 @@ mod tests {
         MemoryRecord {
             id: 0,
             uuid: Uuid::new_v4(),
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: String::new(),
             content_hash: String::new(),
             metadata: serde_json::Value::Null,

@@ -43,6 +43,8 @@ pub struct ImportOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportInput {
+    #[serde(default = "default_namespace")]
+    pub namespace_id: i64,
     pub items: Vec<ImportItem>,
     #[serde(default = "default_embed")]
     pub embed: bool,
@@ -50,11 +52,16 @@ pub struct ImportInput {
     pub on_conflict: ConflictStrategy,
 }
 
+const fn default_namespace() -> i64 {
+    crate::storage::namespace::DEFAULT_NAMESPACE_ID
+}
+
 const fn default_embed() -> bool {
     true
 }
 
 pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaResult<ImportOutput> {
+    let ns = input.namespace_id;
     let received = input.items.len();
     let mut imported = 0usize;
     let mut duplicates = 0usize;
@@ -101,9 +108,11 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         let content_hash = sha256_hex(&content);
 
         let existing: Option<(i64, String)> = sqlx::query_as(
-            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND status != 'deleted'",
+            "SELECT id, uuid FROM memory_items WHERE content_hash = ?1 AND namespace_id = ?2 AND \
+             status != 'deleted'",
         )
         .bind(&content_hash)
+        .bind(ns)
         .fetch_optional(&svc.database.pool)
         .await
         .map_err(NovaError::storage)?;
@@ -114,13 +123,15 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         }
 
         if let Some(u) = provided_uuid {
-            let uuid_exists: bool =
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM memory_items WHERE uuid = ?1")
-                    .bind(u.to_string())
-                    .fetch_one(&svc.database.pool)
-                    .await
-                    .map_err(NovaError::storage)?
-                    > 0;
+            let uuid_exists: bool = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2",
+            )
+            .bind(u.to_string())
+            .bind(ns)
+            .fetch_one(&svc.database.pool)
+            .await
+            .map_err(NovaError::storage)?
+                > 0;
 
             if uuid_exists {
                 duplicates += 1;
@@ -133,11 +144,12 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         let expires_ts = expires_at.map(|t| t.timestamp());
 
         let result = sqlx::query(
-            "INSERT INTO memory_items (uuid, content, content_hash, metadata_json, source, \
-             importance, access_count, last_accessed, created_at, expires_at, status) VALUES (?1, \
-             ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO memory_items (uuid, namespace_id, content, content_hash, metadata_json, \
+             source, importance, access_count, last_accessed, created_at, expires_at, status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(insert_uuid.to_string())
+        .bind(ns)
         .bind(&content)
         .bind(&content_hash)
         .bind(metadata.to_string())
@@ -154,9 +166,13 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
         match result {
             Ok(_) => {
                 if !tags.is_empty() {
-                    let _ =
-                        crate::storage::memory::attach_tags(&svc.database.pool, insert_uuid, &tags)
-                            .await;
+                    let _ = crate::storage::memory::attach_tags(
+                        &svc.database.pool,
+                        ns,
+                        insert_uuid,
+                        &tags,
+                    )
+                    .await;
                 }
                 if input.embed {
                     let meta = svc.embedding.meta();
@@ -165,7 +181,13 @@ pub async fn import_memories(svc: &MemoryService, input: ImportInput) -> NovaRes
                             if vec.len() == meta.dims {
                                 let _ = svc
                                     .vector_store
-                                    .insert_vector(insert_uuid, &meta.provider, &meta.model, &vec)
+                                    .insert_vector(
+                                        ns,
+                                        insert_uuid,
+                                        &meta.provider,
+                                        &meta.model,
+                                        &vec,
+                                    )
                                     .await;
                             }
                         },
@@ -238,6 +260,7 @@ mod tests {
             },
         ];
         let input = ImportInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: false,
             on_conflict: ConflictStrategy::Skip,
@@ -260,6 +283,7 @@ mod tests {
             ..Default::default()
         }];
         let input = ImportInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: false,
             on_conflict: ConflictStrategy::Skip,
@@ -288,6 +312,7 @@ mod tests {
             ..Default::default()
         }];
         let input = ImportInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: false,
             on_conflict: ConflictStrategy::Skip,
@@ -316,6 +341,7 @@ mod tests {
             ..Default::default()
         }];
         let input = ImportInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: false,
             on_conflict: ConflictStrategy::Skip,
@@ -351,6 +377,7 @@ mod tests {
             },
         ];
         let input = ImportInput {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             items,
             embed: false,
             on_conflict: ConflictStrategy::Skip,

@@ -54,6 +54,7 @@ pub struct DedupDecision {
 
 pub async fn detect(
     svc: &MemoryService,
+    namespace_id: i64,
     content: &str,
     opts: &DedupOptions,
 ) -> NovaResult<Vec<SimilarHit>> {
@@ -63,14 +64,15 @@ pub async fn detect(
     let threshold = opts.threshold.clamp(0.0, 1.0);
     let k = opts.max_candidates.clamp(1, 100);
     let query = svc.embedding.embed_one(content).await?;
-    let hits = svc.vector_store.knn_search(&query, k, threshold).await?;
+    let hits = svc.vector_store.knn_search(namespace_id, &query, k, threshold).await?;
     let mut out = Vec::with_capacity(hits.len());
     for hit in hits {
-        let record = match svc.memory_repo.get_by_uuid(&svc.database, hit.memory_uuid).await {
-            Ok(r) => r,
-            Err(e) if e.code() == ErrorCode::NotFound => continue,
-            Err(e) => return Err(e),
-        };
+        let record =
+            match svc.memory_repo.get_by_uuid(&svc.database, namespace_id, hit.memory_uuid).await {
+                Ok(r) => r,
+                Err(e) if e.code() == ErrorCode::NotFound => continue,
+                Err(e) => return Err(e),
+            };
         if record.status != MemoryStatus::Active {
             continue;
         }
@@ -88,10 +90,11 @@ pub async fn detect(
 
 pub(crate) async fn decide(
     svc: &MemoryService,
+    namespace_id: i64,
     content: &str,
     opts: &DedupOptions,
 ) -> NovaResult<DedupDecision> {
-    let hits = detect(svc, content, opts).await?;
+    let hits = detect(svc, namespace_id, content, opts).await?;
     let Some(best) = hits.first() else {
         return Ok(DedupDecision {
             blocked_by: None,
@@ -109,7 +112,7 @@ pub(crate) async fn decide(
         merged: false,
     };
     if opts.mode == DedupMode::Merge {
-        merge_into(svc, best.memory_uuid, content).await?;
+        merge_into(svc, namespace_id, best.memory_uuid, content).await?;
         return Ok(DedupDecision {
             blocked_by: Some(best.memory_uuid),
             merged: true,
@@ -118,15 +121,22 @@ pub(crate) async fn decide(
     Ok(decision)
 }
 
-async fn merge_into(svc: &MemoryService, existing_uuid: Uuid, content: &str) -> NovaResult<()> {
-    let existing = svc.memory_repo.get_by_uuid(&svc.database, existing_uuid).await?;
+async fn merge_into(
+    svc: &MemoryService,
+    namespace_id: i64,
+    existing_uuid: Uuid,
+    content: &str,
+) -> NovaResult<()> {
+    let existing = svc.memory_repo.get_by_uuid(&svc.database, namespace_id, existing_uuid).await?;
     let combined = if existing.content.is_empty() {
         content.to_string()
     } else {
         format!("{}\n{}", existing.content, content)
     };
     let hash = sha256_hex(&combined);
-    svc.memory_repo.update_content(&svc.database, existing_uuid, &combined, &hash).await?;
+    svc.memory_repo
+        .update_content(&svc.database, namespace_id, existing_uuid, &combined, &hash)
+        .await?;
     let meta = svc.embedding.meta();
     let vec = svc.embedding.embed_one(&combined).await?;
     if vec.len() != meta.dims {
@@ -137,6 +147,8 @@ async fn merge_into(svc: &MemoryService, existing_uuid: Uuid, content: &str) -> 
             meta.provider
         )));
     }
-    svc.vector_store.insert_vector(existing_uuid, &meta.provider, &meta.model, &vec).await?;
+    svc.vector_store
+        .insert_vector(namespace_id, existing_uuid, &meta.provider, &meta.model, &vec)
+        .await?;
     Ok(())
 }

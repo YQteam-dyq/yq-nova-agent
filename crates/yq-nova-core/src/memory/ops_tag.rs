@@ -11,6 +11,7 @@ pub const MAX_TAG_LIMIT: u32 = 500;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TagListInput {
+    pub namespace_id: i64,
     pub limit: u32,
     pub offset: u32,
 }
@@ -18,6 +19,7 @@ pub struct TagListInput {
 impl Default for TagListInput {
     fn default() -> Self {
         Self {
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             limit: 100,
             offset: 0,
         }
@@ -35,6 +37,7 @@ pub struct TagListOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRenameInput {
+    pub namespace_id: i64,
     pub name: String,
     pub new_name: String,
 }
@@ -47,6 +50,7 @@ pub struct TagRenameOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagDeleteInput {
+    pub namespace_id: i64,
     pub name: String,
 }
 
@@ -67,10 +71,11 @@ pub async fn list_tags(svc: &MemoryService, input: TagListInput) -> NovaResult<T
             input.limit
         )));
     }
-    let total = svc.tag_repo.count_all_tags(&svc.database).await?;
+    let total = svc.tag_repo.count_all_tags(&svc.database, input.namespace_id).await?;
     let limit = input.limit as usize;
     let offset = input.offset as usize;
-    let items = svc.tag_repo.list_all_tags(&svc.database, limit, offset).await?;
+    let items =
+        svc.tag_repo.list_all_tags(&svc.database, input.namespace_id, limit, offset).await?;
     Ok(TagListOutput {
         total,
         count: items.len(),
@@ -89,7 +94,7 @@ pub async fn rename_tag(svc: &MemoryService, input: TagRenameInput) -> NovaResul
     if new_name.is_empty() {
         return Err(NovaError::validation("tags: new_name must not be empty"));
     }
-    svc.tag_repo.rename_tag(&svc.database, name, new_name).await?;
+    svc.tag_repo.rename_tag(&svc.database, input.namespace_id, name, new_name).await?;
     Ok(TagRenameOutput {
         name: name.to_string(),
         new_name: new_name.to_string(),
@@ -101,7 +106,8 @@ pub async fn delete_tag(svc: &MemoryService, input: TagDeleteInput) -> NovaResul
     if name.is_empty() {
         return Err(NovaError::validation("tags: name must not be empty"));
     }
-    let affected_memories = svc.tag_repo.delete_tag(&svc.database, name).await?;
+    let affected_memories =
+        svc.tag_repo.delete_tag(&svc.database, input.namespace_id, name).await?;
     Ok(TagDeleteOutput {
         name: name.to_string(),
         deleted: true,
@@ -166,6 +172,7 @@ mod tests {
         let limited = list_tags(
             &svc,
             TagListInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 limit: 1,
                 offset: 0,
             },
@@ -178,6 +185,7 @@ mod tests {
         let bad = list_tags(
             &svc,
             TagListInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 limit: 0,
                 offset: 0,
             },
@@ -195,6 +203,7 @@ mod tests {
         let out = rename_tag(
             &svc,
             TagRenameInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 name: "legacy".into(),
                 new_name: "archive".into(),
             },
@@ -212,6 +221,7 @@ mod tests {
         let conflict = rename_tag(
             &svc,
             TagRenameInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 name: "keep".into(),
                 new_name: "archive".into(),
             },
@@ -223,6 +233,7 @@ mod tests {
         let missing = rename_tag(
             &svc,
             TagRenameInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 name: "absent".into(),
                 new_name: "other".into(),
             },
@@ -240,6 +251,7 @@ mod tests {
         let out = delete_tag(
             &svc,
             TagDeleteInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 name: "legacy".into(),
             },
         )
@@ -254,6 +266,7 @@ mod tests {
         let missing = delete_tag(
             &svc,
             TagDeleteInput {
+                namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                 name: "legacy".into(),
             },
         )

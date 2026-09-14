@@ -60,7 +60,13 @@ fn bench_vector_knn(c: &mut Criterion) {
                     DIMS,
                 );
                 store
-                    .insert_vector(mem_uuid, "bench", "mock-64d", &v)
+                    .insert_vector(
+                        yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
+                        mem_uuid,
+                        "bench",
+                        "mock-64d",
+                        &v,
+                    )
                     .await
                     .expect("insert vector");
             }
@@ -71,7 +77,12 @@ fn bench_vector_knn(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| {
-                let hits = rt.block_on(store.knn_search(black_box(&query), K, -1.0));
+                let hits = rt.block_on(store.knn_search(
+                    yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
+                    black_box(&query),
+                    K,
+                    -1.0,
+                ));
                 black_box(hits)
             });
         });
@@ -95,6 +106,7 @@ fn bench_graph_bfs(c: &mut Criterion) {
                     .upsert(
                         &svc.database,
                         UpsertEntityInput {
+                            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                             name: &format!("node-{i}"),
                             r#type: "bench",
                             description: None,
@@ -112,6 +124,7 @@ fn bench_graph_bfs(c: &mut Criterion) {
                     rr.insert(
                         &svc.database,
                         InsertRelationInput {
+                            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                             source_uuid: src,
                             target_uuid: tgt,
                             predicate: "links_to",
@@ -137,7 +150,11 @@ fn bench_graph_bfs(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| {
-                let nodes = rt.block_on(svc.traverse_graph(black_box(start), opts.clone()));
+                let nodes = rt.block_on(svc.traverse_graph(
+                    yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
+                    black_box(start),
+                    opts.clone(),
+                ));
                 black_box(nodes)
             });
         });

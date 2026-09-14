@@ -227,37 +227,49 @@ impl MemoryService {
     }
 
     pub async fn get_memory(&self, uuid: uuid::Uuid) -> NovaResult<MemoryRecord> {
-        self.memory_repo.get_by_uuid(&self.database, uuid).await
+        self.get_memory_in(crate::storage::namespace::DEFAULT_NAMESPACE_ID, uuid).await
+    }
+
+    pub async fn get_memory_in(
+        &self,
+        namespace_id: i64,
+        uuid: uuid::Uuid,
+    ) -> NovaResult<MemoryRecord> {
+        self.memory_repo.get_by_uuid(&self.database, namespace_id, uuid).await
     }
 
     pub async fn find_near_duplicates(
         &self,
+        namespace_id: i64,
         content: &str,
         opts: quality::dedup::DedupOptions,
     ) -> NovaResult<Vec<quality::dedup::SimilarHit>> {
-        quality::dedup::detect(self, content, &opts).await
+        quality::dedup::detect(self, namespace_id, content, &opts).await
     }
 
     pub async fn summarize_memories(
         &self,
+        namespace_id: i64,
         member_uuids: &[uuid::Uuid],
         opts: quality::summary::SummaryOptions,
     ) -> NovaResult<quality::summary::SummaryEntry> {
-        quality::summary::summarize_group(self, member_uuids, &opts).await
+        quality::summary::summarize_group(self, namespace_id, member_uuids, &opts).await
     }
 
     pub async fn rebalance_importance(
         &self,
+        namespace_id: i64,
         opts: quality::importance::RebalanceOptions,
     ) -> NovaResult<quality::importance::RebalanceOutput> {
-        quality::importance::rebalance(self, opts).await
+        quality::importance::rebalance(self, namespace_id, opts).await
     }
 
     pub async fn discover_associations(
         &self,
+        namespace_id: i64,
         opts: quality::associate::AssociateOptions,
     ) -> NovaResult<quality::associate::AssociateOutput> {
-        quality::associate::discover(self, opts).await
+        quality::associate::discover(self, namespace_id, opts).await
     }
 
     pub async fn insert_memory_raw<'a>(

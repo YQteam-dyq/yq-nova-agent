@@ -192,6 +192,7 @@ async fn main() -> NovaResult<()> {
     };
     let forgotten = client
         .forget(ops_forget::ForgetInput {
+            namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
             target: ops_forget::ForgetTarget::Filter(f),
             mode: ForgetMode::Hard,
             gc_graph: false,

@@ -104,6 +104,7 @@ impl VectorStore for SqliteVecVectorStore {
 
     async fn insert_vector(
         &self,
+        namespace_id: i64,
         memory_uuid: Uuid,
         provider: &str,
         model: &str,
@@ -117,9 +118,19 @@ impl VectorStore for SqliteVecVectorStore {
             return Err(NovaError::validation("embedding.model must not be empty"));
         }
 
-        let rowid = uuid_rowid(&memory_uuid);
         let mem_s = memory_uuid.to_string();
+        let owns: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2")
+                .bind(&mem_s)
+                .bind(namespace_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(NovaError::storage)?;
+        if owns.is_none() {
+            return Err(NovaError::not_found(format!("memory {memory_uuid} in namespace")));
+        }
 
+        let rowid = uuid_rowid(&memory_uuid);
         let blob = vec_to_blob(vec);
 
         sqlx::query(&format!("DELETE FROM {} WHERE rowid = ?1", Self::TABLE))
@@ -141,18 +152,29 @@ impl VectorStore for SqliteVecVectorStore {
         Ok(())
     }
 
-    async fn delete_vector(&self, memory_uuid: Uuid) -> NovaResult<()> {
-        let rowid = uuid_rowid(&memory_uuid);
-        sqlx::query(&format!("DELETE FROM {} WHERE rowid = ?1", Self::TABLE))
-            .bind(rowid)
-            .execute(&self.pool)
-            .await
-            .map_err(NovaError::storage)?;
+    async fn delete_vector(&self, namespace_id: i64, memory_uuid: Uuid) -> NovaResult<()> {
+        let mem_s = memory_uuid.to_string();
+        let owns: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM memory_items WHERE uuid = ?1 AND namespace_id = ?2")
+                .bind(&mem_s)
+                .bind(namespace_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(NovaError::storage)?;
+        if owns.is_some() {
+            let rowid = uuid_rowid(&memory_uuid);
+            sqlx::query(&format!("DELETE FROM {} WHERE rowid = ?1", Self::TABLE))
+                .bind(rowid)
+                .execute(&self.pool)
+                .await
+                .map_err(NovaError::storage)?;
+        }
         Ok(())
     }
 
     async fn knn_search(
         &self,
+        namespace_id: i64,
         query: &[f32],
         k: usize,
         threshold: f32,
@@ -162,10 +184,11 @@ impl VectorStore for SqliteVecVectorStore {
         let blob = vec_to_blob(query);
 
         let rows: Vec<(String, f64)> = sqlx::query_as(&format!(
-            "SELECT memory_uuid, distance FROM {} WHERE embedding MATCH ?1 ORDER BY distance \
-             LIMIT ?2",
+            "SELECT memory_uuid, distance FROM {} WHERE memory_uuid IN (SELECT uuid FROM \
+             memory_items WHERE namespace_id = ?1) AND embedding MATCH ?2 AND k = ?3",
             Self::TABLE
         ))
+        .bind(namespace_id)
         .bind(blob)
         .bind(k)
         .fetch_all(&self.pool)
@@ -222,6 +245,8 @@ mod tests {
         v.iter().map(|x| x / norm).collect()
     }
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     #[tokio::test]
     #[ignore]
     async fn vec_backend_create_table_and_insert() {
@@ -230,9 +255,9 @@ mod tests {
         store.init().await.expect("create vec0 table");
 
         let u = Uuid::new_v4();
-        store.insert_vector(u, "test", "m1", &[1.0, 0.0, 0.0, 0.0]).await.unwrap();
+        store.insert_vector(NS, u, "test", "m1", &[1.0, 0.0, 0.0, 0.0]).await.unwrap();
 
-        let hits = store.knn_search(&[1.0, 0.0, 0.0, 0.0], 10, -2.0).await.unwrap();
+        let hits = store.knn_search(NS, &[1.0, 0.0, 0.0, 0.0], 10, -2.0).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].memory_uuid, u);
         assert!((hits[0].similarity - 1.0).abs() < 1e-4);
@@ -257,14 +282,14 @@ mod tests {
         ];
 
         for (u, v) in &data {
-            linear.insert_vector(*u, "test", "m", v).await.unwrap();
-            hns.insert_vector(*u, "test", "m", v).await.unwrap();
+            linear.insert_vector(NS, *u, "test", "m", v).await.unwrap();
+            hns.insert_vector(NS, *u, "test", "m", v).await.unwrap();
         }
 
         let query = normalize(&[0.8, 0.6, 0.0, 0.0]);
 
-        let linear_hits = linear.knn_search(&query, 4, -2.0).await.unwrap();
-        let hns_hits = hns.knn_search(&query, 4, -2.0).await.unwrap();
+        let linear_hits = linear.knn_search(NS, &query, 4, -2.0).await.unwrap();
+        let hns_hits = hns.knn_search(NS, &query, 4, -2.0).await.unwrap();
 
         assert_eq!(linear_hits.len(), hns_hits.len(), "top-k lengths differ");
         let linear_uuids: Vec<Uuid> = linear_hits.iter().map(|h| h.memory_uuid).collect();
@@ -289,10 +314,10 @@ mod tests {
         store.init().await.unwrap();
 
         let u = Uuid::new_v4();
-        store.insert_vector(u, "test", "m", &[1.0, 0.0]).await.unwrap();
-        store.delete_vector(u).await.unwrap();
+        store.insert_vector(NS, u, "test", "m", &[1.0, 0.0]).await.unwrap();
+        store.delete_vector(NS, u).await.unwrap();
 
-        let hits = store.knn_search(&[1.0, 0.0], 10, -2.0).await.unwrap();
+        let hits = store.knn_search(NS, &[1.0, 0.0], 10, -2.0).await.unwrap();
         assert!(hits.iter().all(|h| h.memory_uuid != u));
     }
 }

@@ -87,11 +87,16 @@ async fn upsert_link(
     Ok(!exists)
 }
 
-pub async fn discover(svc: &MemoryService, opts: AssociateOptions) -> NovaResult<AssociateOutput> {
+pub async fn discover(
+    svc: &MemoryService,
+    namespace_id: i64,
+    opts: AssociateOptions,
+) -> NovaResult<AssociateOutput> {
     if !opts.enabled {
         return Ok(AssociateOutput::default());
     }
     let filter = MemoryFilter {
+        namespace_id: Some(namespace_id),
         status_in: Some(vec![MemoryStatus::Active]),
         ..Default::default()
     };
@@ -233,6 +238,7 @@ mod tests {
         assert_ne!(a.uuid, b.uuid);
         let out = discover(
             &svc,
+            crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             AssociateOptions {
                 enabled: true,
                 similarity_threshold: -1.0,
@@ -258,7 +264,13 @@ mod tests {
             })
             .await
             .unwrap();
-        let out = discover(&svc, AssociateOptions::default()).await.unwrap();
+        let out = discover(
+            &svc,
+            crate::storage::namespace::DEFAULT_NAMESPACE_ID,
+            AssociateOptions::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(out.created, 0);
         assert_eq!(out.updated, 0);
     }

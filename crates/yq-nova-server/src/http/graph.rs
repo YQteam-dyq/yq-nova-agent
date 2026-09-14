@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Extension, Query, State},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -16,7 +16,7 @@ use yq_nova_core::{
     },
 };
 
-use crate::http::{AppError, AppState, Result};
+use crate::http::{AppError, AppState, Result, auth::NamespaceContext};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UpsertEntityRequest {
@@ -128,18 +128,20 @@ pub struct ExtractLinkRequest {
 
 pub async fn upsert_entity(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<UpsertEntityRequest>,
 ) -> Result<Json<UpsertEntityResponse>> {
     let repo = SqliteEntityRepository::new();
     let db = &state.db;
     let input = UpsertEntityInput {
+        namespace_id: ns.id,
         name: req.name.trim(),
         r#type: req.entity_type.trim(),
         description: req.description.as_deref(),
         metadata: req.metadata.as_ref(),
     };
     let outcome = repo.upsert(db, input).await?;
-    let entity = repo.get_by_uuid(db, outcome.uuid()).await?;
+    let entity = repo.get_by_uuid(db, ns.id, outcome.uuid()).await?;
     Ok(Json(UpsertEntityResponse {
         outcome,
         entity,
@@ -148,6 +150,7 @@ pub async fn upsert_entity(
 
 pub async fn list_entities(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Query(q): Query<ListEntitiesQuery>,
 ) -> Result<Json<Vec<EntityRecord>>> {
     let repo = SqliteEntityRepository::new();
@@ -157,6 +160,7 @@ pub async fn list_entities(
     let rows = repo
         .list(
             db,
+            ns.id,
             q.name_prefix.as_deref(),
             q.entity_type.as_deref(),
             limit.saturating_add(q.offset),
@@ -172,12 +176,14 @@ pub async fn list_entities(
 
 pub async fn upsert_relation(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<UpsertRelationRequest>,
 ) -> Result<Json<UpsertRelationResponse>> {
     let repo = SqliteRelationRepository::new();
     let db = &state.db;
     let predicate = req.predicate.trim().to_string();
     let input = InsertRelationInput {
+        namespace_id: ns.id,
         source_uuid: req.source_uuid,
         target_uuid: req.target_uuid,
         predicate: &predicate,
@@ -189,7 +195,7 @@ pub async fn upsert_relation(
     let outcome = repo.insert(db, input).await?;
     let relation_uuid = outcome.uuid();
 
-    let list = repo.list_outgoing(db, req.source_uuid, Some(predicate.as_str()), 50).await?;
+    let list = repo.list_outgoing(db, ns.id, req.source_uuid, Some(predicate.as_str()), 50).await?;
     let relation = list
         .into_iter()
         .find(|r| r.target_uuid == req.target_uuid && r.predicate.trim() == predicate)
@@ -211,6 +217,7 @@ pub async fn upsert_relation(
 
 pub async fn list_relations(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Query(q): Query<ListRelationsQuery>,
 ) -> Result<Json<Vec<RelationRecord>>> {
     let repo = SqliteRelationRepository::new();
@@ -221,24 +228,24 @@ pub async fn list_relations(
     let mut rows: Vec<RelationRecord> = Vec::new();
 
     if let Some(src) = q.source {
-        let got = repo.list_outgoing(db, src, q.predicate.as_deref(), total_limit).await?;
+        let got = repo.list_outgoing(db, ns.id, src, q.predicate.as_deref(), total_limit).await?;
         if let Some(tgt) = q.target {
             rows.extend(got.into_iter().filter(|r| r.target_uuid == tgt));
         } else {
             rows = got;
         }
     } else if let Some(tgt) = q.target {
-        let got = repo.list_incoming(db, tgt, q.predicate.as_deref(), total_limit).await?;
+        let got = repo.list_incoming(db, ns.id, tgt, q.predicate.as_deref(), total_limit).await?;
         rows = got;
     } else {
         let ent_repo = SqliteEntityRepository::new();
-        let ents = ent_repo.list(db, None, None, 50, 0).await?;
+        let ents = ent_repo.list(db, ns.id, None, None, 50, 0).await?;
         for e in ents {
             if rows.len() >= total_limit {
                 break;
             }
             let mut got =
-                repo.list_outgoing(db, e.uuid, q.predicate.as_deref(), total_limit).await?;
+                repo.list_outgoing(db, ns.id, e.uuid, q.predicate.as_deref(), total_limit).await?;
             rows.append(&mut got);
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.id));
@@ -251,6 +258,7 @@ pub async fn list_relations(
 
 pub async fn traverse(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<TraverseRequest>,
 ) -> Result<Json<Vec<TraverseNode>>> {
     let svc: &GraphService = &state.graph;
@@ -260,16 +268,17 @@ pub async fn traverse(
         predicate_whitelist: req.predicate_whitelist,
         min_confidence: req.min_confidence,
     };
-    let nodes = svc.traverse_graph(req.start, opts).await?;
+    let nodes = svc.traverse_graph(ns.id, req.start, opts).await?;
     Ok(Json(nodes))
 }
 
 pub async fn extract_and_link(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ExtractLinkRequest>,
 ) -> Result<Json<LinkResult>> {
     let svc: &GraphService = &state.graph;
-    let out = svc.extract_and_link(&req.text, &req.opts).await?;
+    let out = svc.extract_and_link(ns.id, &req.text, &req.opts).await?;
     Ok(Json(out))
 }
 
@@ -281,6 +290,7 @@ pub struct MergeEntitiesRequest {
 
 pub async fn merge_entities(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<MergeEntitiesRequest>,
 ) -> Result<Json<MergeEntitiesOutput>> {
     let svc: &GraphService = &state.graph;
@@ -288,6 +298,6 @@ pub async fn merge_entities(
         keep_uuid: req.keep_uuid,
         discard_uuids: req.discard_uuids,
     };
-    let out = svc.merge_entities(input).await?;
+    let out = svc.merge_entities(ns.id, input).await?;
     Ok(Json(out))
 }

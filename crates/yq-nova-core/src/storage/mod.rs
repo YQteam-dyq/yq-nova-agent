@@ -13,6 +13,7 @@ pub mod entity;
 pub mod fts5;
 pub mod memory;
 pub mod migration;
+pub mod namespace;
 pub mod relation;
 pub mod tag;
 pub mod vector;
@@ -296,6 +297,8 @@ pub trait Repository<T>: Send + Sync {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MemoryFilter {
+    pub namespace_id: Option<i64>,
+
     pub source_in: Option<Vec<MemorySource>>,
 
     pub created_after: Option<chrono::DateTime<chrono::Utc>>,
@@ -329,6 +332,10 @@ pub use memory::{
     InsertMemoryInput, InsertOutcome, MemoryRecord, MemoryRepository, SqliteMemoryRepository,
 };
 pub use migration::Migrator;
+pub use namespace::{
+    CreateNamespaceInput, DeleteNamespaceOutcome, NamespaceRecord, NamespaceRepository,
+    SqliteNamespaceRepository, UpdateNamespaceInput, default_namespace_id,
+};
 pub use relation::{
     InsertRelationInput, InsertRelationOutcome, RelationRecord, RelationRepository,
     SqliteRelationRepository,

@@ -90,12 +90,15 @@ pub fn score(
     raw.clamp(0.0, 1.0)
 }
 
-async fn count_references(svc: &MemoryService, uuid: Uuid) -> NovaResult<usize> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM relations WHERE memory_uuid = ?1")
-        .bind(uuid.to_string())
-        .fetch_one(&svc.database.pool)
-        .await
-        .map_err(NovaError::storage)?;
+async fn count_references(svc: &MemoryService, namespace_id: i64, uuid: Uuid) -> NovaResult<usize> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM relations WHERE memory_uuid = ?1 AND namespace_id = ?2",
+    )
+    .bind(uuid.to_string())
+    .bind(namespace_id)
+    .fetch_one(&svc.database.pool)
+    .await
+    .map_err(NovaError::storage)?;
     Ok(count.max(0) as usize)
 }
 
@@ -113,14 +116,14 @@ async fn record_log(svc: &MemoryService, uuid: Uuid, importance: f32) -> NovaRes
     Ok(())
 }
 
-pub async fn maintain_one(svc: &MemoryService, uuid: Uuid) -> NovaResult<f32> {
-    let record = svc.memory_repo.get_by_uuid(&svc.database, uuid).await?;
+pub async fn maintain_one(svc: &MemoryService, namespace_id: i64, uuid: Uuid) -> NovaResult<f32> {
+    let record = svc.memory_repo.get_by_uuid(&svc.database, namespace_id, uuid).await?;
     if record.status != MemoryStatus::Active {
         return Ok(record.importance);
     }
     let now = Utc::now();
     let last_seen = record.last_accessed.unwrap_or(record.created_at);
-    let references = count_references(svc, uuid).await?;
+    let references = count_references(svc, namespace_id, uuid).await?;
     let updated = score(
         record.importance,
         record.access_count,
@@ -130,17 +133,22 @@ pub async fn maintain_one(svc: &MemoryService, uuid: Uuid) -> NovaResult<f32> {
         &ImportanceWeights::default(),
     );
     if (updated - record.importance).abs() > 0.001 {
-        svc.memory_repo.update_importance(&svc.database, uuid, updated).await?;
+        svc.memory_repo.update_importance(&svc.database, namespace_id, uuid, updated).await?;
         record_log(svc, uuid, updated).await?;
     }
     Ok(updated)
 }
 
-pub async fn rebalance(svc: &MemoryService, opts: RebalanceOptions) -> NovaResult<RebalanceOutput> {
+pub async fn rebalance(
+    svc: &MemoryService,
+    namespace_id: i64,
+    opts: RebalanceOptions,
+) -> NovaResult<RebalanceOutput> {
     if !opts.enabled {
         return Ok(RebalanceOutput::default());
     }
     let filter = MemoryFilter {
+        namespace_id: Some(namespace_id),
         status_in: Some(vec![MemoryStatus::Active]),
         ..Default::default()
     };
@@ -160,7 +168,7 @@ pub async fn rebalance(svc: &MemoryService, opts: RebalanceOptions) -> NovaResul
         if !seen.insert(record.uuid) {
             continue;
         }
-        let references = count_references(svc, record.uuid).await?;
+        let references = count_references(svc, namespace_id, record.uuid).await?;
         let last_seen = record.last_accessed.unwrap_or(record.created_at);
         let updated =
             score(record.importance, record.access_count, last_seen, now, references, &weights);
@@ -169,7 +177,9 @@ pub async fn rebalance(svc: &MemoryService, opts: RebalanceOptions) -> NovaResul
             continue;
         }
         if opts.persist {
-            svc.memory_repo.update_importance(&svc.database, record.uuid, updated).await?;
+            svc.memory_repo
+                .update_importance(&svc.database, namespace_id, record.uuid, updated)
+                .await?;
             record_log(svc, record.uuid, updated).await?;
         }
         out.updated += 1;
@@ -238,6 +248,7 @@ mod tests {
         .unwrap();
         let out = rebalance(
             &svc,
+            crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             RebalanceOptions {
                 enabled: true,
                 persist: true,

@@ -1,13 +1,13 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
 use yq_nova_core::memory::ops_tag::{
     TagDeleteInput, TagDeleteOutput, TagListInput, TagListOutput, TagRenameInput, TagRenameOutput,
 };
 
-use crate::http::{AppState, Result};
+use crate::http::{AppState, Result, auth::NamespaceContext};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -23,9 +23,11 @@ pub struct RenameTagRequest {
 
 pub async fn list_tags(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Query(query): Query<ListTagsQuery>,
 ) -> Result<Json<TagListOutput>> {
     let input = TagListInput {
+        namespace_id: ns.id,
         limit: query.limit.unwrap_or(100),
         offset: query.offset.unwrap_or(0),
     };
@@ -35,10 +37,12 @@ pub async fn list_tags(
 
 pub async fn rename_tag(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Path(name): Path<String>,
     Json(req): Json<RenameTagRequest>,
 ) -> Result<Json<TagRenameOutput>> {
     let input = TagRenameInput {
+        namespace_id: ns.id,
         name,
         new_name: req.new_name,
     };
@@ -48,9 +52,11 @@ pub async fn rename_tag(
 
 pub async fn delete_tag(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Path(name): Path<String>,
 ) -> Result<Json<TagDeleteOutput>> {
     let input = TagDeleteInput {
+        namespace_id: ns.id,
         name,
     };
     let out = state.memory.delete_tag(input).await?;
