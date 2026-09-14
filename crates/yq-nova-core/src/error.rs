@@ -72,6 +72,10 @@ impl NovaError {
         Self::new(ErrorCode::Conflict, msg.into(), None)
     }
 
+    pub fn forbidden<M: Into<String>>(msg: M) -> Self {
+        Self::new(ErrorCode::Forbidden, msg.into(), None)
+    }
+
     pub fn storage<E: Into<anyhow::Error>>(src: E) -> Self {
         let src = src.into();
         Self::new(ErrorCode::Storage, src.to_string(), Some(src))

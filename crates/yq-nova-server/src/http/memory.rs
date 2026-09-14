@@ -261,9 +261,14 @@ pub async fn merge_memories(
 
 pub async fn export_memories(
     State(state): State<AppState>,
+    Extension(ns): Extension<NamespaceContext>,
     Json(req): Json<ExportInput>,
 ) -> Result<Json<yq_nova_core::memory::ops_export::ExportOutput>> {
     let svc: &MemoryService = &state.memory;
+    let mut req = req;
+    let mut filter = req.filter.take().unwrap_or_else(|| yq_nova_core::storage::MemoryFilter::default());
+    filter.namespace_id = Some(ns.id);
+    req.filter = Some(filter);
     let out = svc.export(req).await?;
     Ok(Json(out))
 }

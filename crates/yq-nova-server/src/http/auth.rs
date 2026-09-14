@@ -17,6 +17,20 @@ pub struct NamespaceContext {
     pub id: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientScope {
+    Admin,
+    Tenant,
+}
+
+pub async fn tenant_ns(
+    db: &yq_nova_core::storage::Database,
+    ns_id: i64,
+) -> yq_nova_core::error::NovaResult<yq_nova_core::storage::namespace::NamespaceRecord> {
+    let repo = SqliteNamespaceRepository::new();
+    repo.get_by_id(db, ns_id).await
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -105,9 +119,9 @@ pub async fn auth_middleware(
         };
         return match ns_repo.get_by_name(&state.db, ns_name).await {
             Ok(Some(ns)) => {
-                req.extensions_mut().insert(NamespaceContext {
-                    id: ns.id,
-                });
+                req.extensions_mut()
+                    .insert(NamespaceContext { id: ns.id });
+                req.extensions_mut().insert(ClientScope::Tenant);
                 next.run(req).await
             },
             Ok(None) => not_found(format!("namespace '{ns_name}' not found")),
@@ -124,6 +138,7 @@ pub async fn auth_middleware(
                 req.extensions_mut().insert(NamespaceContext {
                     id: ns.id,
                 });
+                req.extensions_mut().insert(ClientScope::Admin);
                 next.run(req).await
             },
             Ok(None) => not_found(format!("namespace '{name}' not found")),
@@ -142,6 +157,7 @@ pub async fn auth_middleware(
             req.extensions_mut().insert(NamespaceContext {
                 id: ns.id,
             });
+            req.extensions_mut().insert(ClientScope::Admin);
             next.run(req).await
         },
         Ok(None) => not_found(format!("namespace '{name}' not found")),
