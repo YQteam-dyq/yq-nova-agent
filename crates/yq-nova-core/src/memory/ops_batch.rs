@@ -107,6 +107,7 @@ pub async fn remember_batch(
                 embed: item.embed,
                 extract_graph: item.extract_graph,
                 chunk_options: item.chunk_options.clone(),
+                dedup: None,
             })
             .await;
 

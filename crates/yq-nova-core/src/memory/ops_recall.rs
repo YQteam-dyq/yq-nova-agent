@@ -44,6 +44,8 @@ pub struct RecallInput<'a> {
     pub group_chunks: bool,
 
     pub entity_focus: Vec<String>,
+
+    pub rebalance_importance: bool,
 }
 
 impl<'a> Default for RecallInput<'a> {
@@ -61,6 +63,7 @@ impl<'a> Default for RecallInput<'a> {
             filter: MemoryFilter::default(),
             group_chunks: false,
             entity_focus: Vec::new(),
+            rebalance_importance: false,
         }
     }
 }
@@ -357,6 +360,9 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
     let mut hits: Vec<RecallHit> = Vec::with_capacity(collapsed.len().min(top_k));
     for rh in collapsed.into_iter().take(top_k) {
         let _ = svc.memory_repo.mark_accessed(&svc.database, rh.memory.uuid).await;
+        if input.rebalance_importance {
+            let _ = super::quality::importance::maintain_one(svc, rh.memory.uuid).await;
+        }
         hits.push(RecallHit {
             memory: rh.memory.clone(),
             final_score: rh.final_score,
