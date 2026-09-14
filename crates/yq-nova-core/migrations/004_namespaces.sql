@@ -16,7 +16,14 @@ VALUES ('00000000-0000-0000-0000-000000000001', 'default', NULL, '{}', strftime(
 -- SQLite cannot add a FK via ALTER TABLE, so we drop every table
 -- that references memory_items (embeddings + full-text triggers),
 -- rebuild memory_items with the FK, then restore the dependencies.
+-- Embedding rows and the FTS index are preserved across the rebuild.
 -- =============================================================
+
+-- Back up existing embedding rows before the reference tables are dropped,
+-- so no stored vectors are lost during the upgrade.
+DROP TABLE IF EXISTS embeddings_bak;
+CREATE TABLE embeddings_bak AS
+    SELECT memory_uuid, dims, provider, model, vec_blob, created_at FROM embeddings;
 
 -- Sever the full-text sync triggers and the embeddings FK dependency
 -- first so memory_items can be dropped cleanly.
@@ -57,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_last_accessed ON memory_items(last_accesse
 CREATE INDEX IF NOT EXISTS idx_memory_status_importance ON memory_items(status, importance);
 CREATE INDEX IF NOT EXISTS idx_memory_status_source_created ON memory_items(status, source, created_at);
 
--- embeddings (restore with FK back to the rebuilt memory_items)
+-- embeddings (restore with FK back to the rebuilt memory_items, preserving data)
 CREATE TABLE IF NOT EXISTS embeddings (
     memory_uuid     TEXT    NOT NULL PRIMARY KEY,
     dims            INTEGER NOT NULL,
@@ -67,6 +74,9 @@ CREATE TABLE IF NOT EXISTS embeddings (
     created_at      INTEGER NOT NULL,
     FOREIGN KEY (memory_uuid) REFERENCES memory_items(uuid) ON DELETE CASCADE
 );
+INSERT OR IGNORE INTO embeddings (memory_uuid, dims, provider, model, vec_blob, created_at)
+SELECT memory_uuid, dims, provider, model, vec_blob, created_at FROM embeddings_bak;
+DROP TABLE embeddings_bak;
 CREATE INDEX IF NOT EXISTS idx_embeddings_dims ON embeddings(dims);
 CREATE INDEX IF NOT EXISTS idx_embeddings_dims_provider ON embeddings(dims, provider);
 
@@ -98,6 +108,10 @@ FOR EACH ROW BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, content)
         VALUES('delete', old.id, old.content);
 END;
+
+-- Rebuild the FTS index from the restored memory_items rows so keyword
+-- recall also finds memories that existed before this migration.
+INSERT INTO memory_fts(memory_fts) VALUES('rebuild');
 
 -- =============================================================
 -- The remaining tenant tables are namespace-aware.
