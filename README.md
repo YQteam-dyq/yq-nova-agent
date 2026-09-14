@@ -327,6 +327,7 @@ crates/
 ├── yq-nova-server/    # HTTP server (axum) + CLI binary
 ├── yq-nova-sdk/       # Rust HTTP client SDK with builder API
 └── yq-nova-mcp/       # MCP server exposing the memory API to AI clients
+```
 
 ## Ecosystem SDKs
 
@@ -341,7 +342,6 @@ The `python/` client covers every v1 endpoint. The `js/` SDK mirrors the same
 23 endpoints with typed methods for Node.js and browsers. `langchain-yq-nova`
 and `llama-index-yq-nova` wrap `remember / recall / forget` as native memory
 providers and agent tools for the two frameworks.
-```
 
 ---
 
