@@ -290,7 +290,7 @@ impl NamespaceRepository for SqliteNamespaceRepository {
         let Some((id,)) = exists else {
             return Ok(DeleteNamespaceOutcome::NotFound);
         };
-        let mut tx = db.begin().await.map_err(NovaError::from)?;
+        let mut tx = db.begin().await?;
         sqlx::query("DELETE FROM entities WHERE namespace_id = ?1")
             .bind(id)
             .execute(&mut *tx)

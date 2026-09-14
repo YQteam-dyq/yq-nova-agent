@@ -196,7 +196,6 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use http_body_util::BodyExt;
     use tower::ServiceExt;
     use uuid::Uuid;
     use yq_nova_core::{

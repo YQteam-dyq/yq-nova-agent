@@ -266,8 +266,7 @@ pub async fn export_memories(
 ) -> Result<Json<yq_nova_core::memory::ops_export::ExportOutput>> {
     let svc: &MemoryService = &state.memory;
     let mut req = req;
-    let mut filter =
-        req.filter.take().unwrap_or_else(|| yq_nova_core::storage::MemoryFilter::default());
+    let mut filter = req.filter.take().unwrap_or_else(yq_nova_core::storage::MemoryFilter::default);
     filter.namespace_id = Some(ns.id);
     req.filter = Some(filter);
     let out = svc.export(req).await?;
