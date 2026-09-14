@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-yq-nova"
+version = "0.3.0"
+description = "LangChain memory provider and tools for the yq-nova agent memory service"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "../../LICENSE" }
+keywords = ["langchain", "memory", "agent", "ai", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: Other/Proprietary License",
+]
+dependencies = [
+    "langchain-core>=0.3.0",
+    "yq-nova>=0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/YQteam-dyq/yq-nova-agent"
+
+[tool.setuptools.packages.find]
+include = ["langchain_yq_nova*"]
