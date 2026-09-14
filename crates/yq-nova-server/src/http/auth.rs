@@ -119,8 +119,9 @@ pub async fn auth_middleware(
         };
         return match ns_repo.get_by_name(&state.db, ns_name).await {
             Ok(Some(ns)) => {
-                req.extensions_mut()
-                    .insert(NamespaceContext { id: ns.id });
+                req.extensions_mut().insert(NamespaceContext {
+                    id: ns.id,
+                });
                 req.extensions_mut().insert(ClientScope::Tenant);
                 next.run(req).await
             },

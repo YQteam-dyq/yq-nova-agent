@@ -258,7 +258,13 @@ mod tests {
         (state, router)
     }
 
-    async fn send(router: &Router, method: &str, uri: &str, auth: &str, body: Option<&str>) -> StatusCode {
+    async fn send(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        auth: &str,
+        body: Option<&str>,
+    ) -> StatusCode {
         let mut b = Request::builder().uri(uri).method(method);
         b = b.header("authorization", &format!("Bearer {auth}"));
         let b = if let Some(payload) = body {
@@ -275,19 +281,9 @@ mod tests {
         let (_state, router) = make_router().await;
         let auth = "global-secret";
 
+        assert_eq!(send(&router, "GET", "/v1/namespaces", auth, None).await, StatusCode::OK);
         assert_eq!(
-            send(&router, "GET", "/v1/namespaces", auth, None).await,
-            StatusCode::OK
-        );
-        assert_eq!(
-            send(
-                &router,
-                "POST",
-                "/v1/namespaces",
-                auth,
-                Some(r#"{"name":"newns"}"#)
-            )
-            .await,
+            send(&router, "POST", "/v1/namespaces", auth, Some(r#"{"name":"newns"}"#)).await,
             StatusCode::CREATED
         );
         assert_eq!(
@@ -305,14 +301,7 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         assert_eq!(
-            send(
-                &router,
-                "POST",
-                "/v1/namespaces",
-                "key-a",
-                Some(r#"{"name":"rogue"}"#)
-            )
-            .await,
+            send(&router, "POST", "/v1/namespaces", "key-a", Some(r#"{"name":"rogue"}"#)).await,
             StatusCode::FORBIDDEN
         );
         assert_eq!(
