@@ -119,7 +119,7 @@ pub async fn run_batch_extract(
         }
         for memory in &rows {
             summary.scanned += 1;
-            match graph.extract_and_link(&memory.content, &graph_opts).await {
+            match graph.extract_and_link(memory.namespace_id, &memory.content, &graph_opts).await {
                 Ok(result) => {
                     summary.extracted += 1;
                     summary.entities_upserted += result.entities_upserted as u64;
@@ -423,7 +423,14 @@ mod tests {
             .into_iter()
             .find(|m| m.content.contains("hidden"))
             .unwrap();
-        repo.update_status(&db, hidden.uuid, MemoryStatus::Archived).await.unwrap();
+        repo.update_status(
+            &db,
+            crate::storage::namespace::DEFAULT_NAMESPACE_ID,
+            hidden.uuid,
+            MemoryStatus::Archived,
+        )
+        .await
+        .unwrap();
         let options = BatchExtractOptions {
             filter: MemoryFilter {
                 status_in: Some(vec![MemoryStatus::Active]),

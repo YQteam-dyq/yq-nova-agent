@@ -119,6 +119,7 @@ pub fn extractive(texts: &[&str], max_chars: usize) -> String {
 
 pub async fn summarize_group(
     svc: &MemoryService,
+    namespace_id: i64,
     member_uuids: &[Uuid],
     opts: &SummaryOptions,
 ) -> NovaResult<SummaryEntry> {
@@ -128,7 +129,7 @@ pub async fn summarize_group(
     let members = member_uuids.to_vec();
     let mut records = Vec::with_capacity(members.len());
     for uuid in &members {
-        match svc.memory_repo.get_by_uuid(&svc.database, *uuid).await {
+        match svc.memory_repo.get_by_uuid(&svc.database, namespace_id, *uuid).await {
             Ok(r) => records.push(r),
             Err(_) => continue,
         }
@@ -156,6 +157,7 @@ pub async fn summarize_group(
     });
     let remember_out = svc
         .remember(RememberInput {
+            namespace_id,
             content: &summary,
             source: MemorySource::System,
             importance: opts.importance,
@@ -175,11 +177,16 @@ pub async fn summarize_group(
     })
 }
 
-pub async fn summarize_top(svc: &MemoryService, opts: SummaryOptions) -> NovaResult<SummaryOutput> {
+pub async fn summarize_top(
+    svc: &MemoryService,
+    namespace_id: i64,
+    opts: SummaryOptions,
+) -> NovaResult<SummaryOutput> {
     if !opts.enabled {
         return Ok(SummaryOutput::default());
     }
     let filter = MemoryFilter {
+        namespace_id: Some(namespace_id),
         status_in: Some(vec![MemoryStatus::Active]),
         tags_all: opts.tag.as_ref().map(|t| vec![t.clone()]),
         ..Default::default()
@@ -194,7 +201,7 @@ pub async fn summarize_top(svc: &MemoryService, opts: SummaryOptions) -> NovaRes
         return Ok(out);
     }
     let uuids: Vec<Uuid> = records.iter().map(|r| r.uuid).collect();
-    let entry = summarize_group(svc, &uuids, &opts).await?;
+    let entry = summarize_group(svc, namespace_id, &uuids, &opts).await?;
     out.entries.push(entry);
     Ok(out)
 }
@@ -254,7 +261,10 @@ mod tests {
             max_summary_chars: 200,
             ..Default::default()
         };
-        let entry = summarize_group(&svc, &uuids, &opts).await.unwrap();
+        let entry =
+            summarize_group(&svc, crate::storage::namespace::DEFAULT_NAMESPACE_ID, &uuids, &opts)
+                .await
+                .unwrap();
         assert_eq!(entry.member_uuids.len(), 5);
         let summary = svc.get_memory(entry.summary_uuid).await.unwrap();
         assert_eq!(summary.source, MemorySource::System);
@@ -290,7 +300,9 @@ mod tests {
             max_summary_chars: 200,
             ..Default::default()
         };
-        let out = summarize_top(&svc, opts).await.unwrap();
+        let out = summarize_top(&svc, crate::storage::namespace::DEFAULT_NAMESPACE_ID, opts)
+            .await
+            .unwrap();
         assert_eq!(out.scanned, 5);
         assert_eq!(out.entries.len(), 1);
     }

@@ -197,7 +197,11 @@ impl GraphService {
                 if name.is_empty() {
                     continue;
                 }
-                let existing = match self.entity_repo.find_by_name(&self.database, &name).await {
+                let existing = match self
+                    .entity_repo
+                    .find_by_name(&self.database, namespace_id, &name)
+                    .await
+                {
                     Ok(rows) => rows.into_iter().next(),
                     Err(_) => None,
                 };

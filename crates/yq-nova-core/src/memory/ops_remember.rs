@@ -173,10 +173,11 @@ async fn remember_one(
 ) -> NovaResult<RememberOutput> {
     if let Some(opts) = dedup {
         if opts.enabled {
-            let decision = super::quality::dedup::decide(svc, content, &opts).await?;
+            let decision = super::quality::dedup::decide(svc, namespace_id, content, &opts).await?;
             if let Some(existing_uuid) = decision.blocked_by {
-                let existing = svc.memory_repo.get_by_uuid(&svc.database, existing_uuid).await?;
-                let hits = super::quality::dedup::detect(svc, content, &opts).await?;
+                let existing =
+                    svc.memory_repo.get_by_uuid(&svc.database, namespace_id, existing_uuid).await?;
+                let hits = super::quality::dedup::detect(svc, namespace_id, content, &opts).await?;
                 return Ok(RememberOutput {
                     uuid: existing_uuid,
                     duplicate: true,
@@ -552,7 +553,11 @@ mod tests {
         let combined = svc.get_memory(a.uuid).await.unwrap();
         assert_eq!(combined.content, "shared content alpha project\nshared content alpha project");
         let q = svc.embedding.embed_one(&combined.content).await.unwrap();
-        let hits = svc.vector_store.knn_search(&q, 5, 0.99).await.unwrap();
+        let hits = svc
+            .vector_store
+            .knn_search(crate::storage::namespace::DEFAULT_NAMESPACE_ID, &q, 5, 0.99)
+            .await
+            .unwrap();
         assert!(hits.iter().any(|h| h.memory_uuid == a.uuid), "merged memory re-embedded");
     }
 

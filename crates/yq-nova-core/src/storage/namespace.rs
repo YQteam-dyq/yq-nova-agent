@@ -294,18 +294,28 @@ impl NamespaceRepository for SqliteNamespaceRepository {
         let mut tx = db.begin().await?;
         // Clean up sqlite-vec vectors that belong to this namespace before
         // deleting the tenant rows; otherwise the virtual table keeps orphaned
-        // vectors on disk even though the parent memories are gone.
+        // vectors on disk even though the parent memories are gone. The virtual
+        // table is only created lazily when the vector store is initialized, so
+        // skip the cleanup when it has never been created.
         #[cfg(feature = "sqlite-vec")]
         {
-            sqlx::query(&format!(
-                "DELETE FROM {} WHERE memory_uuid IN (SELECT uuid FROM memory_items WHERE \
-                 namespace_id = ?1)",
-                crate::storage::vector_vec::SqliteVecVectorStore::TABLE
-            ))
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .map_err(NovaError::storage)?;
+            let has_vec_table: Option<(i64,)> =
+                sqlx::query_as("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
+                    .bind(crate::storage::vector_vec::SqliteVecVectorStore::TABLE)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(NovaError::storage)?;
+            if has_vec_table.is_some() {
+                sqlx::query(&format!(
+                    "DELETE FROM {} WHERE memory_uuid IN (SELECT uuid FROM memory_items WHERE \
+                     namespace_id = ?1)",
+                    crate::storage::vector_vec::SqliteVecVectorStore::TABLE
+                ))
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(NovaError::storage)?;
+            }
         }
         sqlx::query("DELETE FROM entities WHERE namespace_id = ?1")
             .bind(id)
