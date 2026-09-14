@@ -122,6 +122,18 @@ pub fn deterministic_pseudo_embedding(text: &str, dims: usize) -> Vec<f32> {
 pub mod openai_compat;
 pub use openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
 
+pub mod zhipu;
+pub use zhipu::{ZhipuConfig, ZhipuProvider};
+
+pub mod qwen;
+pub use qwen::{QwenConfig, QwenProvider};
+
+pub mod baichuan;
+pub use baichuan::{BaichuanConfig, BaichuanProvider};
+
+pub mod jina;
+pub use jina::{JinaConfig, JinaProvider};
+
 #[cfg(feature = "fastembed")]
 pub mod fastembed;
 #[cfg(feature = "fastembed")]
