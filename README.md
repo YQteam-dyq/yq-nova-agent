@@ -298,6 +298,14 @@ api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
 model = "text-embedding-3-small"
 dimensions = 1536
+
+[graph]
+# Set graph.extract_llm to a chat provider name to enable LLM entity-relation extraction.
+extract_llm = "default"
+[graph.openai_compatible_chat.default]
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
 ```
 
 ---

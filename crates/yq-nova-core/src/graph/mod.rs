@@ -8,11 +8,28 @@ pub use crate::storage::{
     relation::RelationRecord,
 };
 
+pub mod batch;
 pub mod extractor;
+pub mod llm_extractor;
+pub mod policy;
+pub mod quality;
 
-use extractor::{EntityCandidate, EntityExtractor, Extraction, NoopExtractor, RelationCandidate};
+pub use batch::{
+    BatchExtractOptions, BatchExtractQueue, BatchExtractSummary, BatchJobState, BatchJobView,
+};
+use extractor::{
+    EntityCandidate, EntityExtractor, Extraction, NoopExtractor, RegexWikiExtractor,
+    RelationCandidate,
+};
+pub use llm_extractor::{DEFAULT_EXTRACT_PROMPT, LLMEntityExtractor, LlmExtractorConfig};
+pub use policy::{ExtractionFrequency, ExtractionPolicy, FilteringExtractor};
+pub use quality::{
+    ExtractionFeedbackInput, FeedbackRecord, FeedbackTargetKind, FeedbackVerdict, KindStats,
+    QualityStats, SqliteQualityStore,
+};
 
 use crate::{
+    config::GraphConfig,
     error::{NovaError, NovaResult},
     storage::{
         Database,
@@ -20,6 +37,31 @@ use crate::{
         relation::{InsertRelationInput, RelationRepository, SqliteRelationRepository},
     },
 };
+
+pub fn extractor_from_config(config: &GraphConfig) -> NovaResult<Arc<dyn EntityExtractor>> {
+    if config.extract_llm.trim().is_empty() {
+        return Ok(Arc::new(RegexWikiExtractor::new()));
+    }
+    let chat = config.openai_compatible_chat.get(&config.extract_llm).ok_or_else(|| {
+        NovaError::config_msg(format!(
+            "graph.extract_llm references unknown chat provider '{}'",
+            config.extract_llm
+        ))
+    })?;
+    let llm_config = LlmExtractorConfig {
+        base_url: chat.base_url.clone(),
+        api_key: chat.api_key.clone(),
+        model: chat.model.clone(),
+        timeout: chat.timeout,
+        ..Default::default()
+    };
+    let prompt = match &config.extract_prompt_file {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| NovaError::config_msg(format!("read graph.extract_prompt_file: {e}")))?,
+        None => DEFAULT_EXTRACT_PROMPT.to_string(),
+    };
+    Ok(Arc::new(LLMEntityExtractor::new_with_prompt(llm_config, prompt)?))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphExtractOpts {
@@ -131,7 +173,7 @@ impl GraphService {
         if !opts.enabled || text.trim().is_empty() {
             return Ok(LinkResult::default());
         }
-        let extraction: Extraction = self.extractor.extract(text).await.unwrap_or_default();
+        let extraction: Extraction = self.extractor.extract(text).await?;
 
         let mut entity_uuids: std::collections::HashMap<(String, String), Uuid> =
             std::collections::HashMap::new();
@@ -146,6 +188,21 @@ impl GraphService {
                     }
                     entity_uuids.insert((ent.name.clone(), ent.entity_type.clone()), uuid);
                     entities.push((ent.clone(), uuid));
+                }
+            }
+        } else if opts.create_relations {
+            for ent in &extraction.entities {
+                let name = ent.name.trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let existing = match self.entity_repo.find_by_name(&self.database, &name).await {
+                    Ok(rows) => rows.into_iter().next(),
+                    Err(_) => None,
+                };
+                if let Some(rec) = existing {
+                    entity_uuids.insert((name.clone(), ent.entity_type.clone()), rec.uuid);
+                    entities.push((ent.clone(), rec.uuid));
                 }
             }
         }
