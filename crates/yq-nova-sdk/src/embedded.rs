@@ -62,6 +62,7 @@ impl EmbeddedNova {
             embed: req.embed,
             extract_graph: req.extract_graph,
             chunk_options: req.chunk_options,
+            dedup: None,
         };
         self.memory.remember(input).await
     }
@@ -80,6 +81,7 @@ impl EmbeddedNova {
             filter: req.filter,
             group_chunks: req.group_chunks,
             entity_focus: req.entity_focus,
+            rebalance_importance: false,
         };
         self.memory.recall(input).await
     }

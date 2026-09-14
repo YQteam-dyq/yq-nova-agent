@@ -105,6 +105,7 @@ pub async fn remember(
         embed: req.embed,
         extract_graph: req.extract_graph,
         chunk_options: req.chunk_options,
+        dedup: None,
     };
     let out = svc.remember(input).await?;
     Ok(Json(out))
@@ -137,6 +138,7 @@ pub async fn recall(
         filter: req.filter.clone(),
         group_chunks: req.group_chunks,
         entity_focus: req.entity_focus,
+        rebalance_importance: false,
     };
     let out: RecallOutput = svc.recall(input).await?;
     Ok(Json(out))

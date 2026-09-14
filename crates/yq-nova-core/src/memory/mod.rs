@@ -9,6 +9,7 @@ pub mod ops_recall;
 pub mod ops_remember;
 pub mod ops_tag;
 pub mod ops_update;
+pub mod quality;
 pub mod rank;
 
 use std::sync::Arc;
@@ -227,6 +228,36 @@ impl MemoryService {
 
     pub async fn get_memory(&self, uuid: uuid::Uuid) -> NovaResult<MemoryRecord> {
         self.memory_repo.get_by_uuid(&self.database, uuid).await
+    }
+
+    pub async fn find_near_duplicates(
+        &self,
+        content: &str,
+        opts: quality::dedup::DedupOptions,
+    ) -> NovaResult<Vec<quality::dedup::SimilarHit>> {
+        quality::dedup::detect(self, content, &opts).await
+    }
+
+    pub async fn summarize_memories(
+        &self,
+        member_uuids: &[uuid::Uuid],
+        opts: quality::summary::SummaryOptions,
+    ) -> NovaResult<quality::summary::SummaryEntry> {
+        quality::summary::summarize_group(self, member_uuids, &opts).await
+    }
+
+    pub async fn rebalance_importance(
+        &self,
+        opts: quality::importance::RebalanceOptions,
+    ) -> NovaResult<quality::importance::RebalanceOutput> {
+        quality::importance::rebalance(self, opts).await
+    }
+
+    pub async fn discover_associations(
+        &self,
+        opts: quality::associate::AssociateOptions,
+    ) -> NovaResult<quality::associate::AssociateOutput> {
+        quality::associate::discover(self, opts).await
     }
 
     pub async fn insert_memory_raw<'a>(

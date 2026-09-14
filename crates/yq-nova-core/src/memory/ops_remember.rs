@@ -7,6 +7,7 @@ use uuid::Uuid;
 use super::{
     MemoryService,
     chunk::{ChunkInfo, ChunkOptions, chunk_text},
+    quality::dedup::{DedupOptions, SimilarHit},
 };
 use crate::{
     error::{NovaError, NovaResult},
@@ -31,6 +32,7 @@ pub struct RememberInput<'a> {
     pub embed: bool,
     pub extract_graph: bool,
     pub chunk_options: Option<ChunkOptions>,
+    pub dedup: Option<DedupOptions>,
 }
 
 impl<'a> Default for RememberInput<'a> {
@@ -45,6 +47,7 @@ impl<'a> Default for RememberInput<'a> {
             embed: true,
             extract_graph: true,
             chunk_options: None,
+            dedup: None,
         }
     }
 }
@@ -58,6 +61,8 @@ pub struct RememberOutput {
     pub relations_extracted: usize,
     pub tags: Vec<String>,
     pub chunks: Vec<ChunkInfo>,
+    pub near_duplicates: Vec<SimilarHit>,
+    pub merged: bool,
 }
 
 pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResult<RememberOutput> {
@@ -99,6 +104,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                         input.expires_at,
                         input.embed,
                         input.extract_graph,
+                        input.dedup,
                     )
                     .await?;
                     if i == 0 {
@@ -124,6 +130,8 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
                     relations_extracted: total_relations,
                     tags: merged_tags,
                     chunks,
+                    near_duplicates: Vec::new(),
+                    merged: false,
                 });
             }
         }
@@ -139,6 +147,7 @@ pub async fn remember(svc: &MemoryService, input: RememberInput<'_>) -> NovaResu
         input.expires_at,
         input.embed,
         input.extract_graph,
+        input.dedup,
     )
     .await
 }
@@ -154,7 +163,29 @@ async fn remember_one(
     expires_at: Option<DateTime<Utc>>,
     embed: bool,
     extract_graph: bool,
+    dedup: Option<DedupOptions>,
 ) -> NovaResult<RememberOutput> {
+    if let Some(opts) = dedup {
+        if opts.enabled {
+            let decision = super::quality::dedup::decide(svc, content, &opts).await?;
+            if let Some(existing_uuid) = decision.blocked_by {
+                let existing = svc.memory_repo.get_by_uuid(&svc.database, existing_uuid).await?;
+                let hits = super::quality::dedup::detect(svc, content, &opts).await?;
+                return Ok(RememberOutput {
+                    uuid: existing_uuid,
+                    duplicate: true,
+                    embedding_stored: false,
+                    entities_extracted: 0,
+                    relations_extracted: 0,
+                    tags: existing.tags.clone(),
+                    chunks: Vec::new(),
+                    near_duplicates: hits,
+                    merged: decision.merged,
+                });
+            }
+        }
+    }
+
     let extraction = if extract_graph {
         svc.extractor.extract(content).await.unwrap_or_default()
     } else {
@@ -231,6 +262,8 @@ async fn remember_one(
         relations_extracted,
         tags: merged,
         chunks: Vec::new(),
+        near_duplicates: Vec::new(),
+        merged: false,
     })
 }
 
@@ -471,6 +504,74 @@ mod tests {
         assert!(!a.duplicate);
         assert!(b.duplicate);
         assert!(!b.embedding_stored, "dupe should not embed again");
+    }
+
+    #[tokio::test]
+    async fn remember_semantic_dedup_merge_blocks_and_merges() {
+        let svc = temp_svc(false).await;
+        let a = svc
+            .remember(RememberInput {
+                content: "shared content alpha project",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let opts = crate::memory::quality::dedup::DedupOptions {
+            enabled: true,
+            threshold: 0.999,
+            mode: crate::memory::quality::dedup::DedupMode::Merge,
+            max_candidates: 10,
+        };
+        let b = svc
+            .remember(RememberInput {
+                content: "shared content alpha project",
+                dedup: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(a.uuid, b.uuid);
+        assert!(b.duplicate);
+        assert!(b.merged);
+        let combined = svc.get_memory(a.uuid).await.unwrap();
+        assert_eq!(combined.content, "shared content alpha project\nshared content alpha project");
+        let q = svc.embedding.embed_one(&combined.content).await.unwrap();
+        let hits = svc.vector_store.knn_search(&q, 5, 0.99).await.unwrap();
+        assert!(hits.iter().any(|h| h.memory_uuid == a.uuid), "merged memory re-embedded");
+    }
+
+    #[tokio::test]
+    async fn remember_semantic_dedup_report_flags_conflict() {
+        let svc = temp_svc(false).await;
+        let a = svc
+            .remember(RememberInput {
+                content: "shared content beta project",
+                importance: 0.5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let opts = crate::memory::quality::dedup::DedupOptions {
+            enabled: true,
+            threshold: 0.999,
+            mode: crate::memory::quality::dedup::DedupMode::Report,
+            max_candidates: 10,
+        };
+        let b = svc
+            .remember(RememberInput {
+                content: "shared content beta project",
+                dedup: Some(opts),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(a.uuid, b.uuid);
+        assert!(b.duplicate);
+        assert!(!b.merged);
+        assert!(!b.near_duplicates.is_empty());
+        let unchanged = svc.get_memory(a.uuid).await.unwrap();
+        assert_eq!(unchanged.content, "shared content beta project");
     }
 
     #[tokio::test]
