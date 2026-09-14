@@ -24,6 +24,7 @@ pub trait TagRepository: Repository<TagRecord> {
     async fn attach_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         tags: &[String],
     ) -> NovaResult<()>;
@@ -31,6 +32,7 @@ pub trait TagRepository: Repository<TagRecord> {
     async fn detach_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         tags: &[String],
     ) -> NovaResult<()>;
@@ -38,6 +40,7 @@ pub trait TagRepository: Repository<TagRecord> {
     async fn replace_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         new_tags: &[String],
     ) -> NovaResult<()>;
@@ -45,23 +48,36 @@ pub trait TagRepository: Repository<TagRecord> {
     async fn list_tags_of_memory(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
     ) -> NovaResult<Vec<String>>;
 
     async fn list_all_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         limit: usize,
         offset: usize,
     ) -> NovaResult<Vec<TagRecord>>;
 
-    async fn get_tag_by_name(&self, db: &Database, name: &str) -> NovaResult<Option<TagRecord>>;
+    async fn get_tag_by_name(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+    ) -> NovaResult<Option<TagRecord>>;
 
-    async fn count_all_tags(&self, db: &Database) -> NovaResult<i64>;
+    async fn count_all_tags(&self, db: &Database, namespace_id: i64) -> NovaResult<i64>;
 
-    async fn rename_tag(&self, db: &Database, name: &str, new_name: &str) -> NovaResult<()>;
+    async fn rename_tag(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+        new_name: &str,
+    ) -> NovaResult<()>;
 
-    async fn delete_tag(&self, db: &Database, name: &str) -> NovaResult<i64>;
+    async fn delete_tag(&self, db: &Database, namespace_id: i64, name: &str) -> NovaResult<i64>;
 }
 
 #[derive(Clone)]
@@ -91,36 +107,39 @@ impl TagRepository for SqliteTagRepository {
     async fn attach_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         tags: &[String],
     ) -> NovaResult<()> {
-        memory::attach_tags(&db.pool, memory_uuid, tags).await
+        memory::attach_tags(&db.pool, namespace_id, memory_uuid, tags).await
     }
 
     async fn detach_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         tags: &[String],
     ) -> NovaResult<()> {
-        memory::detach_tags(&db.pool, memory_uuid, tags).await
+        memory::detach_tags(&db.pool, namespace_id, memory_uuid, tags).await
     }
 
     async fn replace_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
         new_tags: &[String],
     ) -> NovaResult<()> {
-        memory::attach_tags(&db.pool, memory_uuid, new_tags).await?;
+        memory::attach_tags(&db.pool, namespace_id, memory_uuid, new_tags).await?;
 
-        let current = memory::list_tags_of_memory(&db.pool, memory_uuid).await?;
+        let current = memory::list_tags_of_memory(&db.pool, namespace_id, memory_uuid).await?;
         let new_set: std::collections::HashSet<&str> =
             new_tags.iter().map(|s| s.as_str()).collect();
         let to_remove: Vec<String> =
             current.into_iter().filter(|t| !new_set.contains(t.as_str())).collect();
         if !to_remove.is_empty() {
-            memory::detach_tags(&db.pool, memory_uuid, &to_remove).await?;
+            memory::detach_tags(&db.pool, namespace_id, memory_uuid, &to_remove).await?;
         }
         Ok(())
     }
@@ -128,14 +147,16 @@ impl TagRepository for SqliteTagRepository {
     async fn list_tags_of_memory(
         &self,
         db: &Database,
+        namespace_id: i64,
         memory_uuid: Uuid,
     ) -> NovaResult<Vec<String>> {
-        memory::list_tags_of_memory(&db.pool, memory_uuid).await
+        memory::list_tags_of_memory(&db.pool, namespace_id, memory_uuid).await
     }
 
     async fn list_all_tags(
         &self,
         db: &Database,
+        namespace_id: i64,
         limit: usize,
         offset: usize,
     ) -> NovaResult<Vec<TagRecord>> {
@@ -143,9 +164,12 @@ impl TagRepository for SqliteTagRepository {
         let offset = offset as i64;
         let rows = sqlx::query(
             "SELECT t.id, t.name, t.color, t.created_at, COUNT(mt.memory_uuid) AS memory_count \
-             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id GROUP BY t.id, t.name, \
-             t.color, t.created_at ORDER BY memory_count DESC, t.name ASC LIMIT ? OFFSET ?",
+             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id AND mt.namespace_id = ? \
+             WHERE t.namespace_id = ? GROUP BY t.id, t.name, t.color, t.created_at ORDER BY \
+             memory_count DESC, t.name ASC LIMIT ? OFFSET ?",
         )
+        .bind(namespace_id)
+        .bind(namespace_id)
         .bind(limit)
         .bind(offset)
         .fetch_all(&db.pool)
@@ -158,12 +182,19 @@ impl TagRepository for SqliteTagRepository {
         Ok(out)
     }
 
-    async fn get_tag_by_name(&self, db: &Database, name: &str) -> NovaResult<Option<TagRecord>> {
+    async fn get_tag_by_name(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+    ) -> NovaResult<Option<TagRecord>> {
         let row = sqlx::query(
             "SELECT t.id, t.name, t.color, t.created_at, COUNT(mt.memory_uuid) AS memory_count \
-             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id WHERE t.name = ?1 GROUP BY \
-             t.id, t.name, t.color, t.created_at",
+             FROM tags t LEFT JOIN memory_tags mt ON mt.tag_id = t.id AND mt.namespace_id = ?1 \
+             WHERE t.name = ?2 AND t.namespace_id = ?1 GROUP BY t.id, t.name, t.color, \
+             t.created_at",
         )
+        .bind(namespace_id)
         .bind(name)
         .fetch_optional(&db.pool)
         .await
@@ -174,15 +205,22 @@ impl TagRepository for SqliteTagRepository {
         }
     }
 
-    async fn count_all_tags(&self, db: &Database) -> NovaResult<i64> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+    async fn count_all_tags(&self, db: &Database, namespace_id: i64) -> NovaResult<i64> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE namespace_id = ?1")
+            .bind(namespace_id)
             .fetch_one(&db.pool)
             .await
             .map_err(NovaError::storage)?;
         Ok(n)
     }
 
-    async fn rename_tag(&self, db: &Database, name: &str, new_name: &str) -> NovaResult<()> {
+    async fn rename_tag(
+        &self,
+        db: &Database,
+        namespace_id: i64,
+        name: &str,
+        new_name: &str,
+    ) -> NovaResult<()> {
         let target = new_name.trim();
         if target.is_empty() {
             return Err(NovaError::validation("tag.new_name must not be empty"));
@@ -191,9 +229,10 @@ impl TagRepository for SqliteTagRepository {
             return Ok(());
         }
         let mut tx = db.begin().await?;
-        let res = sqlx::query("UPDATE tags SET name = ?1 WHERE name = ?2")
+        let res = sqlx::query("UPDATE tags SET name = ?1 WHERE name = ?2 AND namespace_id = ?3")
             .bind(target)
             .bind(name)
+            .bind(namespace_id)
             .execute(&mut *tx)
             .await
             .map_err(NovaError::from)?;
@@ -204,16 +243,19 @@ impl TagRepository for SqliteTagRepository {
         Ok(())
     }
 
-    async fn delete_tag(&self, db: &Database, name: &str) -> NovaResult<i64> {
+    async fn delete_tag(&self, db: &Database, namespace_id: i64, name: &str) -> NovaResult<i64> {
         let affected: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memory_tags WHERE tag_id = (SELECT id FROM tags WHERE name = ?1)",
+            "SELECT COUNT(*) FROM memory_tags WHERE namespace_id = ?1 AND tag_id = (SELECT id \
+             FROM tags WHERE name = ?2 AND namespace_id = ?1)",
         )
+        .bind(namespace_id)
         .bind(name)
         .fetch_one(&db.pool)
         .await
         .map_err(NovaError::storage)?;
-        let res = sqlx::query("DELETE FROM tags WHERE name = ?1")
+        let res = sqlx::query("DELETE FROM tags WHERE name = ?1 AND namespace_id = ?2")
             .bind(name)
+            .bind(namespace_id)
             .execute(&db.pool)
             .await
             .map_err(NovaError::storage)?;
@@ -248,6 +290,8 @@ mod tests {
         storage::memory::{InsertMemoryInput, MemoryRepository, SqliteMemoryRepository},
     };
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     async fn temp_db() -> Database {
         let dir = std::env::temp_dir().join(format!("yq-nova-m2-tag-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -278,15 +322,15 @@ mod tests {
             .unwrap()
             .uuid();
 
-        let got = tags.list_tags_of_memory(&db, muuid).await.unwrap();
+        let got = tags.list_tags_of_memory(&db, NS, muuid).await.unwrap();
         assert_eq!(got.len(), 2);
 
-        tags.detach_tags(&db, muuid, &["a".into()]).await.unwrap();
-        let got = tags.list_tags_of_memory(&db, muuid).await.unwrap();
+        tags.detach_tags(&db, NS, muuid, &["a".into()]).await.unwrap();
+        let got = tags.list_tags_of_memory(&db, NS, muuid).await.unwrap();
         assert_eq!(got, vec!["b"]);
 
-        tags.replace_tags(&db, muuid, &["c".into(), "d".into()]).await.unwrap();
-        let mut got = tags.list_tags_of_memory(&db, muuid).await.unwrap();
+        tags.replace_tags(&db, NS, muuid, &["c".into(), "d".into()]).await.unwrap();
+        let mut got = tags.list_tags_of_memory(&db, NS, muuid).await.unwrap();
         got.sort();
         assert_eq!(got, vec!["c", "d"]);
     }
@@ -311,7 +355,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let all = tags.list_all_tags(&db, 100, 0).await.unwrap();
+        let all = tags.list_all_tags(&db, NS, 100, 0).await.unwrap();
         let by_name: std::collections::HashMap<String, i64> =
             all.iter().map(|t| (t.name.clone(), t.memory_count)).collect();
         assert_eq!(by_name.get("shared"), Some(&2));
@@ -341,21 +385,21 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(tags.count_all_tags(&db).await.unwrap(), 2);
+        assert_eq!(tags.count_all_tags(&db, NS).await.unwrap(), 2);
 
-        tags.rename_tag(&db, "legacy", "archive").await.unwrap();
-        let renamed = tags.get_tag_by_name(&db, "archive").await.unwrap().unwrap();
+        tags.rename_tag(&db, NS, "legacy", "archive").await.unwrap();
+        let renamed = tags.get_tag_by_name(&db, NS, "archive").await.unwrap().unwrap();
         assert_eq!(renamed.memory_count, 2);
-        assert!(tags.get_tag_by_name(&db, "legacy").await.unwrap().is_none());
+        assert!(tags.get_tag_by_name(&db, NS, "legacy").await.unwrap().is_none());
 
-        let conflict = tags.rename_tag(&db, "keep", "archive").await.unwrap_err();
+        let conflict = tags.rename_tag(&db, NS, "keep", "archive").await.unwrap_err();
         assert_eq!(conflict.code(), crate::error::ErrorCode::Conflict);
 
-        let affected = tags.delete_tag(&db, "archive").await.unwrap();
+        let affected = tags.delete_tag(&db, NS, "archive").await.unwrap();
         assert_eq!(affected, 2);
-        assert_eq!(tags.count_all_tags(&db).await.unwrap(), 1);
+        assert_eq!(tags.count_all_tags(&db, NS).await.unwrap(), 1);
 
-        let gone = tags.delete_tag(&db, "archive").await.unwrap_err();
+        let gone = tags.delete_tag(&db, NS, "archive").await.unwrap_err();
         assert_eq!(gone.code(), crate::error::ErrorCode::NotFound);
     }
 }

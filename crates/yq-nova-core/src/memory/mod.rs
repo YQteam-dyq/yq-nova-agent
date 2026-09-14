@@ -227,7 +227,15 @@ impl MemoryService {
     }
 
     pub async fn get_memory(&self, uuid: uuid::Uuid) -> NovaResult<MemoryRecord> {
-        self.memory_repo.get_by_uuid(&self.database, uuid).await
+        self.get_memory_in(crate::storage::namespace::DEFAULT_NAMESPACE_ID, uuid).await
+    }
+
+    pub async fn get_memory_in(
+        &self,
+        namespace_id: i64,
+        uuid: uuid::Uuid,
+    ) -> NovaResult<MemoryRecord> {
+        self.memory_repo.get_by_uuid(&self.database, namespace_id, uuid).await
     }
 
     pub async fn find_near_duplicates(

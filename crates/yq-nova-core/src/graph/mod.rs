@@ -167,6 +167,7 @@ impl GraphService {
 
     pub async fn extract_and_link(
         &self,
+        namespace_id: i64,
         text: &str,
         opts: &GraphExtractOpts,
     ) -> NovaResult<LinkResult> {
@@ -181,7 +182,7 @@ impl GraphService {
         let mut upserted = 0usize;
         if opts.upsert_entities {
             for ent in &extraction.entities {
-                let r = upsert_one_entity(self, ent).await;
+                let r = upsert_one_entity(self, namespace_id, ent).await;
                 if let Some((outcome, uuid)) = r {
                     if matches!(outcome, UpsertOutcome::Created(_)) {
                         upserted += 1;
@@ -213,7 +214,8 @@ impl GraphService {
                 if rel.confidence < opts.min_confidence {
                     continue;
                 }
-                if let Some(true) = link_one_relation(self, &entity_uuids, &rel).await {
+                if let Some(true) = link_one_relation(self, namespace_id, &entity_uuids, &rel).await
+                {
                     created += 1;
                 }
             }
@@ -229,14 +231,16 @@ impl GraphService {
 
     pub async fn traverse_graph(
         &self,
+        namespace_id: i64,
         start: Uuid,
         opts: TraverseOpts,
     ) -> NovaResult<Vec<TraverseNode>> {
-        let _start_ent = self.entity_repo.get_by_uuid(&self.database, start).await?;
+        let _start_ent = self.entity_repo.get_by_uuid(&self.database, namespace_id, start).await?;
         let nodes = self
             .relation_repo
             .bfs_traverse(
                 &self.database,
+                namespace_id,
                 start,
                 Direction::Both,
                 opts.max_depth,
@@ -250,15 +254,19 @@ impl GraphService {
 
     pub async fn list_entities(
         &self,
+        namespace_id: i64,
         name_prefix: Option<&str>,
         entity_type: Option<&str>,
         limit: usize,
     ) -> NovaResult<Vec<EntityRecord>> {
-        self.entity_repo.list(&self.database, name_prefix, entity_type, limit, 0).await
+        self.entity_repo
+            .list(&self.database, namespace_id, name_prefix, entity_type, limit, 0)
+            .await
     }
 
     pub async fn merge_entities(
         &self,
+        namespace_id: i64,
         input: MergeEntitiesInput,
     ) -> NovaResult<MergeEntitiesOutput> {
         let keep = input.keep_uuid;
@@ -271,9 +279,9 @@ impl GraphService {
             return Err(NovaError::validation("keep_uuid must not be in discard_uuids"));
         }
 
-        let _keep_entity = self.entity_repo.get_by_uuid(&self.database, keep).await?;
+        let _keep_entity = self.entity_repo.get_by_uuid(&self.database, namespace_id, keep).await?;
         for &d in &discards {
-            self.entity_repo.get_by_uuid(&self.database, d).await?;
+            self.entity_repo.get_by_uuid(&self.database, namespace_id, d).await?;
         }
 
         let pool = &self.database.pool;
@@ -284,12 +292,15 @@ impl GraphService {
         for &d in &discards {
             let d_str = d.to_string();
 
-            let outgoing: Vec<(String, String)> =
-                sqlx::query_as("SELECT uuid, target_uuid FROM relations WHERE source_uuid = ?1")
-                    .bind(&d_str)
-                    .fetch_all(pool)
-                    .await
-                    .map_err(NovaError::storage)?;
+            let outgoing: Vec<(String, String)> = sqlx::query_as(
+                "SELECT uuid, target_uuid FROM relations WHERE source_uuid = ?1 AND namespace_id \
+                 = ?2",
+            )
+            .bind(&d_str)
+            .bind(namespace_id)
+            .fetch_all(pool)
+            .await
+            .map_err(NovaError::storage)?;
 
             for (rel_uuid, tgt_str) in &outgoing {
                 let tgt = match Uuid::parse_str(tgt_str) {
@@ -297,28 +308,36 @@ impl GraphService {
                     Err(_) => continue,
                 };
                 if tgt == keep || discard_set.contains(&tgt) {
-                    sqlx::query("DELETE FROM relations WHERE uuid = ?1")
+                    sqlx::query("DELETE FROM relations WHERE uuid = ?1 AND namespace_id = ?2")
                         .bind(rel_uuid)
+                        .bind(namespace_id)
                         .execute(pool)
                         .await
                         .map_err(NovaError::storage)?;
                 } else {
-                    sqlx::query("UPDATE relations SET source_uuid = ?1 WHERE uuid = ?2")
-                        .bind(&keep_str)
-                        .bind(rel_uuid)
-                        .execute(pool)
-                        .await
-                        .map_err(NovaError::storage)?;
+                    sqlx::query(
+                        "UPDATE relations SET source_uuid = ?1 WHERE uuid = ?2 AND namespace_id = \
+                         ?3",
+                    )
+                    .bind(&keep_str)
+                    .bind(rel_uuid)
+                    .bind(namespace_id)
+                    .execute(pool)
+                    .await
+                    .map_err(NovaError::storage)?;
                     remapped += 1;
                 }
             }
 
-            let incoming: Vec<(String, String)> =
-                sqlx::query_as("SELECT uuid, source_uuid FROM relations WHERE target_uuid = ?1")
-                    .bind(&d_str)
-                    .fetch_all(pool)
-                    .await
-                    .map_err(NovaError::storage)?;
+            let incoming: Vec<(String, String)> = sqlx::query_as(
+                "SELECT uuid, source_uuid FROM relations WHERE target_uuid = ?1 AND namespace_id \
+                 = ?2",
+            )
+            .bind(&d_str)
+            .bind(namespace_id)
+            .fetch_all(pool)
+            .await
+            .map_err(NovaError::storage)?;
 
             for (rel_uuid, src_str) in &incoming {
                 let src = match Uuid::parse_str(src_str) {
@@ -329,26 +348,32 @@ impl GraphService {
                     continue;
                 }
                 if src == keep {
-                    sqlx::query("DELETE FROM relations WHERE uuid = ?1")
+                    sqlx::query("DELETE FROM relations WHERE uuid = ?1 AND namespace_id = ?2")
                         .bind(rel_uuid)
+                        .bind(namespace_id)
                         .execute(pool)
                         .await
                         .map_err(NovaError::storage)?;
                 } else {
-                    sqlx::query("UPDATE relations SET target_uuid = ?1 WHERE uuid = ?2")
-                        .bind(&keep_str)
-                        .bind(rel_uuid)
-                        .execute(pool)
-                        .await
-                        .map_err(NovaError::storage)?;
+                    sqlx::query(
+                        "UPDATE relations SET target_uuid = ?1 WHERE uuid = ?2 AND namespace_id = \
+                         ?3",
+                    )
+                    .bind(&keep_str)
+                    .bind(rel_uuid)
+                    .bind(namespace_id)
+                    .execute(pool)
+                    .await
+                    .map_err(NovaError::storage)?;
                     remapped += 1;
                 }
             }
 
-            self.entity_repo.delete(&self.database, d).await?;
+            self.entity_repo.delete(&self.database, namespace_id, d).await?;
         }
 
-        sqlx::query("DELETE FROM relations WHERE source_uuid = target_uuid")
+        sqlx::query("DELETE FROM relations WHERE source_uuid = target_uuid AND namespace_id = ?1")
+            .bind(namespace_id)
             .execute(pool)
             .await
             .map_err(NovaError::storage)?;
@@ -363,6 +388,7 @@ impl GraphService {
 
 async fn upsert_one_entity(
     svc: &GraphService,
+    namespace_id: i64,
     ent: &EntityCandidate,
 ) -> Option<(UpsertOutcome, Uuid)> {
     let name = ent.name.trim().to_string();
@@ -379,6 +405,7 @@ async fn upsert_one_entity(
         .upsert(
             &svc.database,
             UpsertEntityInput {
+                namespace_id,
                 name: &name,
                 r#type: &etype,
                 description: ent.description.as_deref(),
@@ -393,6 +420,7 @@ async fn upsert_one_entity(
 
 async fn link_one_relation(
     svc: &GraphService,
+    namespace_id: i64,
     entity_uuids: &std::collections::HashMap<(String, String), Uuid>,
     rel: &RelationCandidate,
 ) -> Option<bool> {
@@ -418,6 +446,7 @@ async fn link_one_relation(
         .insert(
             &svc.database,
             InsertRelationInput {
+                namespace_id,
                 source_uuid: src,
                 target_uuid: tgt,
                 predicate: &pred,
@@ -458,6 +487,8 @@ mod tests {
         Uuid, config::StorageConfig, graph::extractor::RegexWikiExtractor, storage::Database,
     };
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     async fn temp_svc() -> GraphService {
         let dir = std::env::temp_dir().join(format!("yq-nova-m3-graph-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -476,6 +507,7 @@ mod tests {
         let svc = temp_svc().await;
         let r = svc
             .extract_and_link(
+                NS,
                 "[[A]] and [[B]]",
                 &GraphExtractOpts {
                     enabled: false,
@@ -493,6 +525,7 @@ mod tests {
         let svc = temp_svc().await;
         let r = svc
             .extract_and_link(
+                NS,
                 "#todo [[Alice Smith]] had a meeting with [[Bob Jones]] at [[Acme Corp]].",
                 &GraphExtractOpts {
                     enabled: true,
@@ -514,6 +547,7 @@ mod tests {
             .upsert(
                 db,
                 UpsertEntityInput {
+                    namespace_id: NS,
                     name: n,
                     r#type: t,
                     description: None,
@@ -536,6 +570,7 @@ mod tests {
         repo.insert(
             db,
             InsertRelationInput {
+                namespace_id: NS,
                 source_uuid: src,
                 target_uuid: tgt,
                 predicate: p,
@@ -563,6 +598,7 @@ mod tests {
 
         let nodes = svc
             .traverse_graph(
+                NS,
                 a,
                 TraverseOpts {
                     max_depth: 2,
@@ -595,6 +631,7 @@ mod tests {
 
         let nodes = svc
             .traverse_graph(
+                NS,
                 a,
                 TraverseOpts {
                     max_depth: 2,
@@ -624,6 +661,7 @@ mod tests {
 
         let nodes = svc
             .traverse_graph(
+                NS,
                 a,
                 TraverseOpts {
                     max_depth: 1,
@@ -652,6 +690,7 @@ mod tests {
 
         let nodes = svc
             .traverse_graph(
+                NS,
                 a,
                 TraverseOpts {
                     max_depth: 1,
@@ -680,20 +719,24 @@ mod tests {
         insert_edge(&svc.database, &svc.relation_repo, c, a, "knows", 1.0).await;
 
         let out = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![b],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![b],
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.kept_uuid, a);
         assert_eq!(out.merged, vec![b]);
         assert_eq!(out.remapped_relations, 1);
 
-        assert!(svc.entity_repo.get_by_uuid(&svc.database, a).await.is_ok());
-        assert!(svc.entity_repo.get_by_uuid(&svc.database, b).await.is_err());
+        assert!(svc.entity_repo.get_by_uuid(&svc.database, NS, a).await.is_ok());
+        assert!(svc.entity_repo.get_by_uuid(&svc.database, NS, b).await.is_err());
 
-        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        let outgoing =
+            svc.relation_repo.list_outgoing(&svc.database, NS, a, None, 100).await.unwrap();
         assert_eq!(outgoing.len(), 1);
         assert_eq!(outgoing[0].target_uuid, c);
     }
@@ -703,10 +746,13 @@ mod tests {
         let svc = temp_svc().await;
         let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
         let err = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![a],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![a],
+                },
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
@@ -717,10 +763,13 @@ mod tests {
         let svc = temp_svc().await;
         let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
         let err = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![],
+                },
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::Validation);
@@ -732,10 +781,13 @@ mod tests {
         let a = upsert(&svc.database, &svc.entity_repo, "A", "t").await;
         let missing = Uuid::new_v4();
         let err = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![missing],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![missing],
+                },
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code(), crate::error::ErrorCode::NotFound);
@@ -749,15 +801,19 @@ mod tests {
         insert_edge(&svc.database, &svc.relation_repo, a, b, "knows", 1.0).await;
 
         let out = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![b],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![b],
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.remapped_relations, 0);
 
-        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        let outgoing =
+            svc.relation_repo.list_outgoing(&svc.database, NS, a, None, 100).await.unwrap();
         assert!(outgoing.is_empty());
     }
 
@@ -772,15 +828,19 @@ mod tests {
         insert_edge(&svc.database, &svc.relation_repo, c, d, "likes", 1.0).await;
 
         let out = svc
-            .merge_entities(MergeEntitiesInput {
-                keep_uuid: a,
-                discard_uuids: vec![b, c],
-            })
+            .merge_entities(
+                NS,
+                MergeEntitiesInput {
+                    keep_uuid: a,
+                    discard_uuids: vec![b, c],
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out.remapped_relations, 2);
 
-        let outgoing = svc.relation_repo.list_outgoing(&svc.database, a, None, 100).await.unwrap();
+        let outgoing =
+            svc.relation_repo.list_outgoing(&svc.database, NS, a, None, 100).await.unwrap();
         assert_eq!(outgoing.len(), 2);
         for rel in &outgoing {
             assert_eq!(rel.target_uuid, d);

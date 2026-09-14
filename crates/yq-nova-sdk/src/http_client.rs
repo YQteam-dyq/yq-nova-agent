@@ -16,7 +16,7 @@ use yq_nova_core::{
     },
     storage::{
         EntityRecord, MemoryFilter, MemoryRecord, MemorySource, RelationRecord, TraverseNode,
-        UpsertOutcome,
+        UpsertOutcome, namespace::NamespaceRecord,
     },
 };
 
@@ -300,6 +300,44 @@ pub struct MergeEntitiesResponse {
     pub remapped_relations: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NamespaceListQuery {
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl Default for NamespaceListQuery {
+    fn default() -> Self {
+        Self {
+            limit: 100,
+            offset: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceListOutput {
+    pub total: i64,
+    pub count: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub items: Vec<NamespaceRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceDeleteOutput {
+    pub name: String,
+    pub deleted: bool,
+    pub protected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateNamespaceRequest {
+    pub description: Option<String>,
+    pub config: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
@@ -343,6 +381,7 @@ struct ServerErrorBody {
 pub struct HttpClient {
     client: ReqwestClient,
     base_url: String,
+    namespace: Option<String>,
 }
 
 impl HttpClient {
@@ -370,11 +409,21 @@ impl HttpClient {
         Ok(Self {
             client,
             base_url: base,
+            namespace: None,
         })
     }
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    pub fn with_namespace(mut self, name: impl Into<String>) -> Self {
+        self.namespace = Some(name.into());
+        self
+    }
+
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
 
     fn url(&self, path: &str) -> String {
@@ -386,10 +435,23 @@ impl HttpClient {
         let resp = self
             .client
             .get(&url)
+            .headers(self.scoped_headers())
             .send()
             .await
             .map_err(|e| NovaError::internal_with_ctx(format!("GET {url}"), e))?;
         self.map_response(resp, &url).await
+    }
+
+    fn scoped_headers(&self) -> header::HeaderMap {
+        let mut h = header::HeaderMap::new();
+        if let Some(ns) = &self.namespace {
+            if !ns.is_empty() {
+                if let Ok(v) = header::HeaderValue::from_str(ns) {
+                    h.insert(header::HeaderName::from_static("x-namespace"), v);
+                }
+            }
+        }
+        h
     }
 
     async fn post_json<B: Serialize, T: DeserializeOwned>(
@@ -401,6 +463,7 @@ impl HttpClient {
         let resp = self
             .client
             .post(&url)
+            .headers(self.scoped_headers())
             .json(body)
             .send()
             .await
@@ -413,6 +476,7 @@ impl HttpClient {
         let resp = self
             .client
             .delete(&url)
+            .headers(self.scoped_headers())
             .send()
             .await
             .map_err(|e| NovaError::internal_with_ctx(format!("DELETE {url}"), e))?;
@@ -428,6 +492,7 @@ impl HttpClient {
         let resp = self
             .client
             .patch(&url)
+            .headers(self.scoped_headers())
             .json(body)
             .send()
             .await
@@ -678,6 +743,66 @@ impl HttpClient {
             return Ok(LinkResult::default());
         }
         self.post_json("/v1/graph/extract-and-link", &req).await
+    }
+
+    pub async fn list_namespaces(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> NovaResult<NamespaceListOutput> {
+        let path = format!("/v1/namespaces?limit={limit}&offset={offset}");
+        self.get_json(&path).await
+    }
+
+    pub async fn get_namespace(&self, name: &str) -> NovaResult<NamespaceRecord> {
+        if name.trim().is_empty() {
+            return Err(NovaError::validation("get_namespace: name must not be empty"));
+        }
+        self.get_json(&format!("/v1/namespaces/{}", urlencoding(name))).await
+    }
+
+    pub async fn create_namespace(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        config: Option<serde_json::Value>,
+    ) -> NovaResult<NamespaceRecord> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(NovaError::validation("create_namespace: name must not be empty"));
+        }
+        if name.eq_ignore_ascii_case("default") {
+            return Err(NovaError::validation("create_namespace: 'default' is reserved"));
+        }
+        let body = serde_json::json!({
+            "name": name,
+            "description": description,
+            "config": config.unwrap_or(serde_json::json!({})),
+        });
+        self.post_json("/v1/namespaces", &body).await
+    }
+
+    pub async fn update_namespace(
+        &self,
+        name: &str,
+        description: Option<String>,
+        config: Option<serde_json::Value>,
+    ) -> NovaResult<NamespaceRecord> {
+        if name.trim().is_empty() {
+            return Err(NovaError::validation("update_namespace: name must not be empty"));
+        }
+        let body = UpdateNamespaceRequest {
+            description,
+            config,
+        };
+        self.patch_json(&format!("/v1/namespaces/{}", urlencoding(name)), &body).await
+    }
+
+    pub async fn delete_namespace(&self, name: &str) -> NovaResult<NamespaceDeleteOutput> {
+        if name.trim().is_empty() {
+            return Err(NovaError::validation("delete_namespace: name must not be empty"));
+        }
+        self.delete_json(&format!("/v1/namespaces/{}", urlencoding(name))).await
     }
 }
 
@@ -989,6 +1114,7 @@ mod tests {
         };
         let forgotten = client
             .forget(ops_forget::ForgetInput {
+                namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                 target: ops_forget::ForgetTarget::Filter(f),
                 mode: ForgetMode::Archive,
                 gc_graph: false,
@@ -1090,5 +1216,48 @@ mod tests {
         assert_eq!(out.entities_upserted, 2);
         assert!(out.entities.iter().any(|(e, _)| e.name == "Rust"));
         assert!(out.entities.iter().any(|(e, _)| e.name == "Tokio"));
+    }
+
+    #[tokio::test]
+    async fn namespace_crud_and_tenant_isolation() {
+        let client = spawn_server("ns").await;
+
+        let ns_a = client.create_namespace("nsA", Some("tenant A"), None).await.unwrap();
+        let ns_b = client
+            .create_namespace("nsB", Some("tenant B"), Some(serde_json::json!({ "quota": 100 })))
+            .await
+            .unwrap();
+        assert_eq!(ns_a.name, "nsA");
+        assert_eq!(ns_b.config["quota"], 100);
+
+        let listed = client.list_namespaces(100, 0).await.unwrap();
+        let names: std::collections::BTreeSet<String> =
+            listed.items.iter().map(|n| n.name.clone()).collect();
+        assert!(names.contains("default"));
+        assert!(names.contains("nsA"));
+        assert!(names.contains("nsB"));
+
+        let got = client.get_namespace("nsA").await.unwrap();
+        assert_eq!(got.description.as_deref(), Some("tenant A"));
+
+        let c_a = client.clone().with_namespace("nsA");
+        let c_b = client.clone().with_namespace("nsB");
+        c_a.remember_builder().content("secret of A").send().await.unwrap();
+        c_b.remember_builder().content("secret of B").send().await.unwrap();
+        c_a.remember_builder().content("another A note").send().await.unwrap();
+
+        let list_a = c_a.list_memories(Default::default()).await.unwrap();
+        let list_b = c_b.list_memories(Default::default()).await.unwrap();
+        assert_eq!(list_a.total, 2);
+        assert_eq!(list_b.total, 1);
+
+        let updated =
+            client.update_namespace("nsA", Some("renamed desc A".into()), None).await.unwrap();
+        assert_eq!(updated.description.as_deref(), Some("renamed desc A"));
+
+        let del = client.delete_namespace("nsA").await.unwrap();
+        assert!(del.deleted);
+        let not_found = client.get_namespace("nsA").await.unwrap_err();
+        assert_eq!(not_found.code(), ErrorCode::NotFound);
     }
 }

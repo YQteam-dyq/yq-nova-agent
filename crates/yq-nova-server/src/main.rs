@@ -354,6 +354,7 @@ async fn run() -> NovaResult<()> {
             tags.sort_unstable();
             tags.dedup();
             let input = ops_remember::RememberInput {
+                namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                 content: &content,
                 importance: args.importance.unwrap_or(0.5),
                 source: args.source.into(),
@@ -456,6 +457,7 @@ async fn run() -> NovaResult<()> {
                 ForgetTarget::Filter(f)
             };
             let input = ForgetInput {
+                namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                 target,
                 mode: args.mode.into(),
                 gc_graph: args.gc_graph,
@@ -570,6 +572,7 @@ async fn run() -> NovaResult<()> {
             let (db, memory, _graph, _provider_name) = open_core_services(&cfg).await?;
             let out = memory
                 .list_tags(ops_tag::TagListInput {
+                    namespace_id: yq_nova_core::storage::namespace::DEFAULT_NAMESPACE_ID,
                     limit: args.limit,
                     offset: args.offset,
                 })

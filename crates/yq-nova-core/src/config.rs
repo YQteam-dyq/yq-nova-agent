@@ -53,6 +53,8 @@ pub struct ServerConfig {
     pub max_request_body_bytes: usize,
 
     pub auth_token: String,
+
+    pub namespace_keys: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for ServerConfig {
@@ -63,6 +65,7 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(30),
             max_request_body_bytes: 10 * 1024 * 1024,
             auth_token: String::new(),
+            namespace_keys: std::collections::BTreeMap::new(),
         }
     }
 }

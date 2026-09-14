@@ -5,7 +5,8 @@ pub use embedded::EmbeddedNova;
 pub use http_client::{
     ExportMemoriesRequest, ExportMemoriesResponse, ImportError, ImportMemoriesRequest,
     ImportMemoriesResponse, MergeEntitiesRequest, MergeEntitiesResponse, MergeMemoriesRequest,
-    MergeMemoriesResponse, UpdateMemoryRequest,
+    MergeMemoriesResponse, NamespaceDeleteOutput, NamespaceListOutput, UpdateMemoryRequest,
+    UpdateNamespaceRequest,
 };
 pub use yq_nova_core::{
     Config, NovaError, NovaResult, Uuid, VERSION,

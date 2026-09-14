@@ -20,6 +20,7 @@ pub trait Fts5Store: Send + Sync + std::fmt::Debug {
     async fn keyword_search(
         &self,
         db: &Database,
+        namespace_id: i64,
         query: &str,
         top_k: usize,
         statuses: &[MemoryStatus],
@@ -78,6 +79,7 @@ impl Fts5Store for SqliteFts5Store {
     async fn keyword_search(
         &self,
         db: &Database,
+        namespace_id: i64,
         query: &str,
         top_k: usize,
         statuses: &[MemoryStatus],
@@ -102,13 +104,14 @@ impl Fts5Store for SqliteFts5Store {
             FROM memory_fts
             JOIN memory_items mi ON mi.id = memory_fts.rowid
             WHERE memory_fts MATCH ?
+              AND mi.namespace_id = ?
               AND mi.status IN ({in_clause})
             ORDER BY bm25(memory_fts) ASC
             LIMIT ?
             "#
         );
 
-        let mut built = sqlx::query_as::<_, (String, f64)>(&sql).bind(q.clone());
+        let mut built = sqlx::query_as::<_, (String, f64)>(&sql).bind(q.clone()).bind(namespace_id);
         for s in statuses {
             built = built.bind(s.as_str());
         }
@@ -191,6 +194,8 @@ mod tests {
         (db, mem, SqliteFts5Store::new())
     }
 
+    const NS: i64 = crate::storage::namespace::DEFAULT_NAMESPACE_ID;
+
     #[tokio::test]
     async fn fts_matches_prefix_and_multitoken() {
         let (db, mem, store) = setup().await;
@@ -213,13 +218,15 @@ mod tests {
         .await
         .unwrap();
 
-        let hits =
-            store.keyword_search(&db, "pine smooth", 10, &[MemoryStatus::Active]).await.unwrap();
+        let hits = store
+            .keyword_search(&db, NS, "pine smooth", 10, &[MemoryStatus::Active])
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert!((hits[0].score - 1.0).abs() < 1e-6, "only hit should be 1.0");
 
         let all_smoothie =
-            store.keyword_search(&db, "smoothie", 10, &[MemoryStatus::Active]).await.unwrap();
+            store.keyword_search(&db, NS, "smoothie", 10, &[MemoryStatus::Active]).await.unwrap();
         assert_eq!(all_smoothie.len(), 2);
 
         assert!(all_smoothie[0].score >= all_smoothie[1].score);
@@ -229,7 +236,11 @@ mod tests {
     async fn fts_empty_query_empty_result() {
         let (db, _, store) = setup().await;
         assert!(
-            store.keyword_search(&db, "   ", 10, &[MemoryStatus::Active]).await.unwrap().is_empty()
+            store
+                .keyword_search(&db, NS, "   ", 10, &[MemoryStatus::Active])
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -254,15 +265,15 @@ mod tests {
         .unwrap();
 
         let only_active =
-            store.keyword_search(&db, "note", 10, &[MemoryStatus::Active]).await.unwrap();
+            store.keyword_search(&db, NS, "note", 10, &[MemoryStatus::Active]).await.unwrap();
         assert_eq!(only_active.len(), 1);
 
         let only_archived =
-            store.keyword_search(&db, "note", 10, &[MemoryStatus::Archived]).await.unwrap();
+            store.keyword_search(&db, NS, "note", 10, &[MemoryStatus::Archived]).await.unwrap();
         assert_eq!(only_archived.len(), 1);
 
         let both = store
-            .keyword_search(&db, "note", 10, &[MemoryStatus::Active, MemoryStatus::Archived])
+            .keyword_search(&db, NS, "note", 10, &[MemoryStatus::Active, MemoryStatus::Archived])
             .await
             .unwrap();
         assert_eq!(both.len(), 2);

@@ -110,10 +110,10 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
 
     let fetch_k = (top_k * 4).min(200).max(top_k.max(10));
     let hybrid_weights = input.hybrid_weights.unwrap_or_default();
-
+    let namespace_id =
+        input.filter.namespace_id.unwrap_or(crate::storage::namespace::DEFAULT_NAMESPACE_ID);
     let statuses: Vec<MemoryStatus> =
         input.filter.status_in.clone().unwrap_or_else(|| vec![MemoryStatus::Active]);
-
     let mut semantic_hits: Vec<(Uuid, f32)> = Vec::new();
     if matches!(input.mode, SearchMode::Semantic | SearchMode::Hybrid) {
         let q_vec = svc.embedding.embed_one(query).await?;
@@ -125,14 +125,19 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
                 expected_dims
             )));
         }
-        let vhits =
-            svc.vector_store.knn_search(&q_vec, fetch_k, input.similarity_threshold).await?;
+        let vhits = svc
+            .vector_store
+            .knn_search(namespace_id, &q_vec, fetch_k, input.similarity_threshold)
+            .await?;
         semantic_hits = vhits.into_iter().map(|h| (h.memory_uuid, h.similarity)).collect();
     }
 
     let mut keyword_hits: Vec<(Uuid, f32)> = Vec::new();
     if matches!(input.mode, SearchMode::Keyword | SearchMode::Hybrid) {
-        let khits = svc.fts5_store.keyword_search(&svc.database, query, fetch_k, &statuses).await?;
+        let khits = svc
+            .fts5_store
+            .keyword_search(&svc.database, namespace_id, query, fetch_k, &statuses)
+            .await?;
 
         keyword_hits = khits.into_iter().map(|h| (h.uuid, h.score * 2.0 - 1.0)).collect();
     }
@@ -148,7 +153,8 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
         seed_uuids.dedup();
         if !seed_uuids.is_empty() {
             let (expanded_mem, _seed_ents) =
-                expand_graph_memories(svc, &seed_uuids, &input.graph, fetch_k).await?;
+                expand_graph_memories(svc, namespace_id, &seed_uuids, &input.graph, fetch_k)
+                    .await?;
             graph_memories = expanded_mem;
         }
     }
@@ -156,7 +162,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
     if !input.entity_focus.is_empty() {
         let mut focus_entity_uuids: BTreeSet<Uuid> = BTreeSet::new();
         for name in &input.entity_focus {
-            match svc.entity_repo.find_by_name(&svc.database, name).await {
+            match svc.entity_repo.find_by_name(&svc.database, namespace_id, name).await {
                 Ok(entities) => {
                     for ent in entities {
                         focus_entity_uuids.insert(ent.uuid);
@@ -170,7 +176,16 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
             for ent_uuid in &focus_entity_uuids {
                 if let Ok(nodes) = svc
                     .relation_repo
-                    .bfs_traverse(&svc.database, *ent_uuid, Direction::Both, 2, 500, &[], 0.0)
+                    .bfs_traverse(
+                        &svc.database,
+                        namespace_id,
+                        *ent_uuid,
+                        Direction::Both,
+                        2,
+                        500,
+                        &[],
+                        0.0,
+                    )
                     .await
                 {
                     for n in nodes {
@@ -185,10 +200,11 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
                 r#"
                 SELECT DISTINCT memory_uuid FROM relations
                 WHERE memory_uuid IS NOT NULL
+                  AND namespace_id = ?1
                   AND (source_uuid IN ({phs}) OR target_uuid IN ({phs}))
                 "#
             );
-            let mut q = sqlx::query_scalar::<_, String>(&sql);
+            let mut q = sqlx::query_scalar::<_, String>(&sql).bind(namespace_id);
             for s in &entity_strs {
                 q = q.bind(s);
             }
@@ -303,7 +319,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
 
     let mut records: Vec<MemoryRecord> = Vec::with_capacity(collected.ordered.len());
     for uuid in &collected.ordered {
-        match svc.memory_repo.get_by_uuid(&svc.database, *uuid).await {
+        match svc.memory_repo.get_by_uuid(&svc.database, namespace_id, *uuid).await {
             Ok(r) => records.push(r),
             Err(e) if matches!(e.code(), crate::error::ErrorCode::NotFound) => continue,
             Err(e) => return Err(e),
@@ -359,7 +375,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
 
     let mut hits: Vec<RecallHit> = Vec::with_capacity(collapsed.len().min(top_k));
     for rh in collapsed.into_iter().take(top_k) {
-        let _ = svc.memory_repo.mark_accessed(&svc.database, rh.memory.uuid).await;
+let _ = svc.memory_repo.mark_accessed(&svc.database, namespace_id, rh.memory.uuid).await;
         if input.rebalance_importance {
             let _ = super::quality::importance::maintain_one(svc, rh.memory.uuid).await;
         }
@@ -381,6 +397,7 @@ pub async fn recall(svc: &MemoryService, input: RecallInput<'_>) -> NovaResult<R
 
 async fn expand_graph_memories(
     svc: &MemoryService,
+    namespace_id: i64,
     seed_memory_uuids: &[Uuid],
     opts: &GraphTraversalOpts,
     limit: usize,
@@ -394,13 +411,13 @@ async fn expand_graph_memories(
     let sql = format!(
         r#"
         SELECT DISTINCT source_uuid FROM relations
-        WHERE memory_uuid IN ({ph}) AND source_uuid IS NOT NULL
+        WHERE memory_uuid IN ({ph}) AND source_uuid IS NOT NULL AND namespace_id = ?1
         UNION
         SELECT DISTINCT target_uuid FROM relations
-        WHERE memory_uuid IN ({ph}) AND target_uuid IS NOT NULL
+        WHERE memory_uuid IN ({ph}) AND target_uuid IS NOT NULL AND namespace_id = ?1
         "#
     );
-    let mut q = sqlx::query_scalar::<_, String>(&sql);
+    let mut q = sqlx::query_scalar::<_, String>(&sql).bind(namespace_id);
     for s in &memory_strs {
         q = q.bind(s);
     }
@@ -421,7 +438,16 @@ async fn expand_graph_memories(
     for ent in &start_entities {
         let Ok(nodes) = svc
             .relation_repo
-            .bfs_traverse(&svc.database, *ent, Direction::Both, max_depth, 500, &[], 0.0)
+            .bfs_traverse(
+                &svc.database,
+                namespace_id,
+                *ent,
+                Direction::Both,
+                max_depth,
+                500,
+                &[],
+                0.0,
+            )
             .await
         else {
             continue;
@@ -935,6 +961,7 @@ mod tests {
         MemoryRecord {
             id: 0,
             uuid: Uuid::nil(),
+            namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
             content: String::new(),
             content_hash: String::new(),
             metadata: serde_json::json!({}),
@@ -1014,6 +1041,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 UpsertEntityInput {
+                    namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                     name: "Alice",
                     r#type: "person",
                     description: None,
@@ -1028,6 +1056,7 @@ mod tests {
             .upsert(
                 &svc.database,
                 UpsertEntityInput {
+                    namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                     name: "Bob",
                     r#type: "person",
                     description: None,
@@ -1062,6 +1091,7 @@ mod tests {
                 .insert(
                     &svc.database,
                     InsertRelationInput {
+                        namespace_id: crate::storage::namespace::DEFAULT_NAMESPACE_ID,
                         source_uuid: src,
                         target_uuid: tgt,
                         predicate: pred,
