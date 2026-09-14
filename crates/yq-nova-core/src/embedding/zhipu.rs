@@ -7,6 +7,7 @@ use serde_with::serde_as;
 use super::{
     EmbeddingMeta, EmbeddingProvider,
     retry::{RetryAction, RetryConfig, classify_http_status, with_retry},
+    truncate_utf8,
 };
 use crate::error::NovaResult;
 
@@ -44,11 +45,35 @@ impl Default for ZhipuConfig {
     }
 }
 
-fn default_dims(model: &str) -> Option<usize> {
-    match model.trim() {
-        "embedding-2" => Some(1024),
-        "embedding-3" => Some(2048),
-        _ => None,
+fn resolve_dims(model: &str, dims: usize) -> NovaResult<(usize, bool)> {
+    let model = model.trim();
+    match model {
+        "embedding-2" => {
+            if dims != 0 && dims != 1024 {
+                return Err(crate::error::NovaError::validation(
+                    "zhipu: embedding-2 returns a fixed 1024 dimensions",
+                ));
+            }
+            Ok((1024, false))
+        },
+        "embedding-3" => {
+            let dim = if dims == 0 { 2048 } else { dims };
+            if !(256..=2048).contains(&dim) {
+                return Err(crate::error::NovaError::validation(format!(
+                    "zhipu: embedding-3 supports 256..=2048 dimensions, got {}",
+                    dim
+                )));
+            }
+            Ok((dim, true))
+        },
+        _ => {
+            if dims == 0 {
+                return Err(crate::error::NovaError::validation(
+                    "zhipu: dims must be set for unknown model",
+                ));
+            }
+            Ok((dims, true))
+        },
     }
 }
 
@@ -84,6 +109,8 @@ pub struct ZhipuProvider {
     config: ZhipuConfig,
 
     endpoint: String,
+
+    send_dimensions: bool,
 }
 
 impl std::fmt::Debug for ZhipuProvider {
@@ -103,16 +130,7 @@ impl ZhipuProvider {
         if model.is_empty() {
             return Err(crate::error::NovaError::validation("zhipu: model must not be empty"));
         }
-        let dims = if config.dims > 0 {
-            config.dims
-        } else {
-            default_dims(&model).ok_or_else(|| {
-                crate::error::NovaError::validation(
-                    "zhipu: dims must be set for unknown model, supported defaults are ".to_owned()
-                        + "embedding-2 (1024) and embedding-3 (2048)",
-                )
-            })?
-        };
+        let (dims, send_dimensions) = resolve_dims(&model, config.dims)?;
         if config.batch_size == 0 {
             return Err(crate::error::NovaError::validation("zhipu: batch_size must be > 0"));
         }
@@ -141,11 +159,12 @@ impl ZhipuProvider {
                 ..config
             },
             endpoint,
+            send_dimensions,
         })
     }
 
     async fn run_once(&self, texts: &[&str]) -> NovaResult<Vec<Vec<f32>>> {
-        let dimensions = (self.meta.dims < 2048).then_some(self.meta.dims);
+        let dimensions = self.send_dimensions.then_some(self.meta.dims);
         let body = ZhipuReqBody {
             model: &self.config.model,
             input: texts,
@@ -170,7 +189,7 @@ impl ZhipuProvider {
             let status = res.status();
             if !status.is_success() {
                 let text = res.text().await.unwrap_or_default();
-                let snippet = if text.len() > 400 { &text[..400] } else { text.as_str() };
+                let snippet = truncate_utf8(&text, 400);
                 return Err((
                     classify_http_status(status),
                     anyhow::anyhow!("HTTP {}: {}", status.as_u16(), snippet),
@@ -254,6 +273,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.meta().dims, 1024);
         assert_eq!(p.meta().provider, "zhipu");
+        assert!(!p.send_dimensions);
 
         let p = ZhipuProvider::new(ZhipuConfig {
             model: "embedding-3".into(),
@@ -261,6 +281,38 @@ mod tests {
         })
         .unwrap();
         assert_eq!(p.meta().dims, 2048);
+        assert!(p.send_dimensions);
+
+        let p = ZhipuProvider::new(ZhipuConfig {
+            model: "embedding-3".into(),
+            dims: 512,
+            ..ZhipuConfig::default()
+        })
+        .unwrap();
+        assert_eq!(p.meta().dims, 512);
+    }
+
+    #[test]
+    fn new_rejects_dims_outside_model_range() {
+        let too_big = ZhipuConfig {
+            model: "embedding-3".into(),
+            dims: 4096,
+            ..ZhipuConfig::default()
+        };
+        assert!(matches!(
+            ZhipuProvider::new(too_big).unwrap_err().code(),
+            crate::error::ErrorCode::Validation
+        ));
+
+        let fixed = ZhipuConfig {
+            model: "embedding-2".into(),
+            dims: 512,
+            ..ZhipuConfig::default()
+        };
+        assert!(matches!(
+            ZhipuProvider::new(fixed).unwrap_err().code(),
+            crate::error::ErrorCode::Validation
+        ));
     }
 
     #[test]

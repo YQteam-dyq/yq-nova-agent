@@ -7,6 +7,7 @@ use serde_with::serde_as;
 use super::{
     EmbeddingMeta, EmbeddingProvider,
     retry::{RetryAction, RetryConfig, classify_http_status, with_retry},
+    truncate_utf8,
 };
 use crate::error::NovaResult;
 
@@ -93,7 +94,15 @@ impl BaichuanProvider {
         if model.is_empty() {
             return Err(crate::error::NovaError::validation("baichuan: model must not be empty"));
         }
-        let dims = if config.dims > 0 { config.dims } else { OUTPUT_DIMS };
+        let dims = match config.dims {
+            0 | OUTPUT_DIMS => OUTPUT_DIMS,
+            other => {
+                return Err(crate::error::NovaError::validation(format!(
+                    "baichuan: Baichuan-Text-Embedding returns fixed {OUTPUT_DIMS} dimensions, \
+                     got {other}"
+                )));
+            },
+        };
         if config.batch_size == 0 {
             return Err(crate::error::NovaError::validation("baichuan: batch_size must be > 0"));
         }
@@ -148,7 +157,7 @@ impl BaichuanProvider {
             let status = res.status();
             if !status.is_success() {
                 let text = res.text().await.unwrap_or_default();
-                let snippet = if text.len() > 400 { &text[..400] } else { text.as_str() };
+                let snippet = truncate_utf8(&text, 400);
                 return Err((
                     classify_http_status(status),
                     anyhow::anyhow!("HTTP {}: {}", status.as_u16(), snippet),
@@ -231,13 +240,22 @@ mod tests {
     }
 
     #[test]
-    fn new_respects_explicit_dims() {
+    fn new_accepts_explicit_default_dims() {
         let p = BaichuanProvider::new(BaichuanConfig {
-            dims: 512,
+            dims: OUTPUT_DIMS,
             ..BaichuanConfig::default()
         })
         .unwrap();
-        assert_eq!(p.meta().dims, 512);
+        assert_eq!(p.meta().dims, OUTPUT_DIMS);
+    }
+
+    #[test]
+    fn new_rejects_non_default_dims() {
+        let r = BaichuanProvider::new(BaichuanConfig {
+            dims: 512,
+            ..BaichuanConfig::default()
+        });
+        assert!(matches!(r.unwrap_err().code(), crate::error::ErrorCode::Validation));
     }
 
     #[test]

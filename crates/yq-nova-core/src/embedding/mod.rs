@@ -119,6 +119,15 @@ pub fn deterministic_pseudo_embedding(text: &str, dims: usize) -> Vec<f32> {
     out
 }
 
+pub(crate) fn truncate_utf8(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let end =
+        text.char_indices().map(|(idx, _)| idx).take_while(|&idx| idx <= max).last().unwrap_or(0);
+    &text[..end]
+}
+
 pub mod openai_compat;
 pub use openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
 

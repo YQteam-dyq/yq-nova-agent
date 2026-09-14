@@ -6,7 +6,10 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::{NovaError, NovaResult};
+use crate::{
+    embedding::{BaichuanConfig, JinaConfig, QwenConfig, ZhipuConfig},
+    error::{NovaError, NovaResult},
+};
 
 pub(crate) mod duration_seconds {
     use std::time::Duration;
@@ -119,6 +122,14 @@ pub struct EmbeddingConfig {
     pub openai_compatible: std::collections::BTreeMap<String, OpenAiCompatConfig>,
 
     pub fastembed_local: std::collections::BTreeMap<String, FastEmbedConfig>,
+
+    pub zhipu: std::collections::BTreeMap<String, ZhipuConfig>,
+
+    pub qwen: std::collections::BTreeMap<String, QwenConfig>,
+
+    pub baichuan: std::collections::BTreeMap<String, BaichuanConfig>,
+
+    pub jina: std::collections::BTreeMap<String, JinaConfig>,
 }
 
 impl Default for EmbeddingConfig {
@@ -129,6 +140,10 @@ impl Default for EmbeddingConfig {
             default_provider: "default".into(),
             openai_compatible: oai,
             fastembed_local: std::collections::BTreeMap::new(),
+            zhipu: std::collections::BTreeMap::new(),
+            qwen: std::collections::BTreeMap::new(),
+            baichuan: std::collections::BTreeMap::new(),
+            jina: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -334,6 +349,34 @@ impl Config {
             if fe.model_name.trim().is_empty() {
                 return Err(NovaError::config_msg(format!(
                     "embedding.fastembed_local['{name}'].model_name must not be empty"
+                )));
+            }
+        }
+        for (name, z) in &self.embedding.zhipu {
+            if z.model.trim().is_empty() {
+                return Err(NovaError::config_msg(format!(
+                    "embedding.zhipu['{name}'].model must not be empty"
+                )));
+            }
+        }
+        for (name, q) in &self.embedding.qwen {
+            if q.model.trim().is_empty() {
+                return Err(NovaError::config_msg(format!(
+                    "embedding.qwen['{name}'].model must not be empty"
+                )));
+            }
+        }
+        for (name, b) in &self.embedding.baichuan {
+            if b.model.trim().is_empty() {
+                return Err(NovaError::config_msg(format!(
+                    "embedding.baichuan['{name}'].model must not be empty"
+                )));
+            }
+        }
+        for (name, j) in &self.embedding.jina {
+            if j.model.trim().is_empty() {
+                return Err(NovaError::config_msg(format!(
+                    "embedding.jina['{name}'].model must not be empty"
                 )));
             }
         }
